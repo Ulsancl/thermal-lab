@@ -1,0 +1,18 @@
+name: 관찰·실험 개선 제안
+description: 열의 이동이나 비교 실험에서 막힌 점을 알려 주세요.
+title: "[제안] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 무엇을 관찰하려 했나요?
+      description: 현재 동작에서 이해하기 어렵거나 조작하기 불편했던 부분을 적어 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: 어떤 변화가 도움이 되나요?
+      description: 예상하는 동작이나 비교 방법을 적어 주세요. 특정 제조사의 비공개 도면·열 설계 자료는 첨부하지 마세요.
+    validations:
+      required: true

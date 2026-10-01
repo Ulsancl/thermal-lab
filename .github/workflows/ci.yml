@@ -1,0 +1,105 @@
+name: Validate Thermal Lab
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: thermal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CI: 'true'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked dependencies and runtimes
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx --no-install playwright install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify heat model, timeline, geometry, lessons and project data
+        run: npm test
+      - name: Build web bundle
+        run: npm run build
+      - name: Verify browser observation and interaction
+        timeout-minutes: 10
+        run: npm run test:browser
+      - name: Verify consumer scene observation
+        timeout-minutes: 10
+        run: npm run test:consumer
+      - name: Verify source desktop app
+        timeout-minutes: 10
+        run: npm run test:desktop
+      - name: Package Windows installer
+        run: npm run package:desktop
+      - name: Verify independent desktop executable
+        timeout-minutes: 10
+        run: |
+          $env:THERMAL_DESKTOP_EXE = Join-Path $env:GITHUB_WORKSPACE 'release/windows/win-unpacked/Thermal Lab.exe'
+          node tests/desktop.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify installer checksum and required documents
+        run: |
+          $taskVersion = (Get-Content -Raw -LiteralPath 'package.json' | ConvertFrom-Json).version
+          $taskInstaller = "release/windows/Thermal-Lab-Setup-$taskVersion.exe"
+          $taskSidecar = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes("$taskInstaller.sha256"))
+          $taskEntry = [regex]::Match($taskSidecar, '\A(?<sha>[0-9a-f]{64})  (?<name>[^\r\n]+)\n\z')
+          if (-not $taskEntry.Success) { throw 'Checksum must contain one SHA256, filename and LF newline' }
+          if ($taskEntry.Groups['name'].Value -cne [System.IO.Path]::GetFileName($taskInstaller)) { throw 'Checksum filename mismatch' }
+          $taskActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $taskInstaller).Hash.ToLowerInvariant()
+          if ($taskActualHash -cne $taskEntry.Groups['sha'].Value) { throw 'Installer checksum mismatch' }
+          foreach ($taskNotice in @('LICENSE.electron.txt', 'LICENSES.chromium.html', 'resources/THREE-LICENSE.txt', 'resources/LICENSE.txt', 'resources/docs/THIRD-PARTY-NOTICES.md', 'resources/docs/model.md', 'resources/docs/anatomy.md', 'resources/docs/references.md', 'resources/docs/release-scope.md', 'resources/docs/privacy.md', 'resources/docs/support.md', 'resources/docs/storage.md', 'resources/docs/experiments.md', 'resources/docs/desktop.md', 'resources/사용 안내.txt')) {
+            if (-not (Test-Path -PathType Leaf -LiteralPath (Join-Path 'release/windows/win-unpacked' $taskNotice))) { throw "Missing document: $taskNotice" }
+          }
+      - name: Retain tested installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: thermal-lab-windows-${{ github.sha }}
+          path: |
+            release/windows/Thermal-Lab-Setup-*.exe
+            release/windows/Thermal-Lab-Setup-*.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Retain verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: thermal-lab-verification-${{ github.sha }}
+          path: |
+            output/browser-integration/report.json
+            output/browser-integration/failure.json
+            output/browser-integration/*.png
+            output/consumer/report.json
+            output/consumer/*.png
+            output/desktop*/result.json
+            output/desktop*/failure.json
+            output/desktop*/failure.png
+            output/desktop*/profile-*/test-artifacts/native-app-restarted.png
+          if-no-files-found: warn
+          retention-days: 14

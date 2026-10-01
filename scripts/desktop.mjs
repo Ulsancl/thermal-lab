@@ -1,0 +1,34 @@
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+
+const require = createRequire(import.meta.url);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const mode = process.argv[2];
+if (!['start', 'package', 'prepare-test'].includes(mode)) throw new Error('Use start, package or prepare-test');
+if (mode === 'prepare-test' && process.env.THERMAL_DESKTOP_EXE) process.exit(0);
+const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+function run(executable, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, { cwd: root, env, stdio: 'inherit', windowsHide: true });
+    child.on('error', reject);
+    child.on('exit', code => code === 0 ? resolve() : reject(new Error(`Process exited with code ${code}`)));
+  });
+}
+const electronPackage = path.dirname(require.resolve('electron/package.json'));
+await run(process.execPath, [path.join(electronPackage, 'install.js')]);
+await run(process.execPath, [path.join(root, 'scripts', 'clean-dist.mjs')]);
+await run(process.execPath, [path.join(path.dirname(require.resolve('vite/package.json')), 'bin', 'vite.js'), 'build']);
+if (mode === 'start') await run(require('electron'), [root]);
+else if (mode === 'package') {
+  await run(process.execPath, [path.join(path.dirname(require.resolve('electron-builder/package.json')), 'cli.js'),
+    '--win', 'nsis', '--x64', '--publish', 'never', '--config', 'electron-builder.json',
+    `--config.electronDist=${path.join(electronPackage, 'dist')}`]);
+  const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const file = path.join(root, 'release', 'windows', `Thermal-Lab-Setup-${version}.exe`);
+  fs.writeFileSync(file + '.sha256', `${createHash('sha256').update(fs.readFileSync(file)).digest('hex')}  ${path.basename(file)}\n`);
+  console.log(`Installer: ${file}`);
+}
