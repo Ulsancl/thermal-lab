@@ -1,6 +1,6 @@
 {
   "name": "thermal-lab",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
@@ -10,12 +10,13 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5230 --strictPort",
     "build": "vite build",
-    "test": "node --test tests/model.test.mjs tests/experiment.test.mjs tests/geometry.test.mjs tests/project.test.mjs tests/atomic-save.test.mjs tests/lessons.test.mjs",
+    "test": "node --test tests/model.test.mjs tests/experiment.test.mjs tests/geometry.test.mjs tests/project.test.mjs tests/atomic-save.test.mjs tests/lessons.test.mjs tests/detail-model.test.mjs tests/scene-detail.test.mjs",
     "test:browser": "node tests/browser.test.mjs",
     "desktop": "node scripts/desktop.mjs start",
     "package:desktop": "node scripts/desktop.mjs package",
     "test:desktop": "node tests/desktop.test.mjs",
-    "test:consumer": "node tests/consumer.test.mjs"
+    "test:consumer": "node tests/consumer.test.mjs",
+    "test:detail": "node tests/detail-browser.test.mjs"
   },
   "dependencies": {
     "three": "0.180.0"

@@ -52,6 +52,9 @@ jobs:
       - name: Verify consumer scene observation
         timeout-minutes: 10
         run: npm run test:consumer
+      - name: Verify thermal detail and temporary structural inspection
+        timeout-minutes: 10
+        run: npm run test:detail
       - name: Verify source desktop app
         timeout-minutes: 10
         run: npm run test:desktop
@@ -97,6 +100,8 @@ jobs:
             output/browser-integration/*.png
             output/consumer/report.json
             output/consumer/*.png
+            output/detail-browser/*.json
+            output/detail-browser/*.png
             output/desktop*/result.json
             output/desktop*/failure.json
             output/desktop*/failure.png

@@ -1,6 +1,6 @@
 # Windows 앱
 
-Thermal Lab의 대상은 Windows 11 x64입니다. [릴리스](https://github.com/Ulsancl/thermal-lab/releases/latest)에서 설치 파일과 같은 이름의 `.sha256`을 받습니다. 설치를 마친 뒤 바탕화면이나 시작 메뉴의 Thermal Lab 아이콘을 누르면 시작합니다. `npm run package:desktop`은 `release/windows/Thermal-Lab-Setup-1.0.0.exe`와 `.sha256`을 만들며 자동 게시하지 않습니다. 파일 이름의 버전은 package.json을 따르고 실제 설치·하드웨어 결과는 각 릴리스 기록을 따릅니다.
+Thermal Lab의 대상은 Windows 11 x64입니다. [릴리스](https://github.com/Ulsancl/thermal-lab/releases/latest)에서 설치 파일과 같은 이름의 `.sha256`을 받습니다. 설치를 마친 뒤 바탕화면이나 시작 메뉴의 Thermal Lab 아이콘을 누르면 시작합니다. `npm run package:desktop`은 `release/windows/Thermal-Lab-Setup-1.1.0.exe`와 `.sha256`을 만들며 자동 게시하지 않습니다. 파일 이름의 버전은 package.json을 따르고 실제 설치·하드웨어 결과는 각 릴리스 기록을 따릅니다.
 
 앱 ID는 `com.thermallab.app`, 로컬 화면 주소는 `app://thermal/`입니다. 앱 데이터 폴더의 Thermal Lab 프로필에 자동 저장·창 크기와 위치·실행 로그를 보관합니다. 도움말의 저장 폴더 열기를 사용하세요. 화면 밖으로 나간 창은 현재 작업 영역 안으로 복원합니다.
 

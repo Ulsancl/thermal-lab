@@ -54,3 +54,22 @@ export function temperatureColor(celsius) {
   const [low, high] = value <= 65 ? stops.slice(0, 2) : stops.slice(1, 3), t = (value - low[0]) / (high[0] - low[0]);
   return '#' + low[1].map((n, i) => Math.round(n + (high[1][i] - n) * t).toString(16).padStart(2, '0')).join('');
 }
+
+// Representative manufactured dimensions, not coefficients of the thermal model.
+export const DETAIL_GEOMETRY = freeze({
+  probeBoreRadius: .0014, probeBottomClearance: .0005,
+  probeInspectionWithdrawalM: .012,
+  glandOuterRadius: .0031, glandLength: .0025,
+  handle: { stemX: [-.104, -.036], y: .061, stemRadius: .0027, flangeRadius: .0031, gripY: .074, gripZ: .061, gripRadius: .0045 },
+  washer: { outerRadius: .005, innerRadius: .0022, height: .0015, centerY: .06525 },
+  clamp: { shaftTopY: .071, headBottomY: .066, headTopY: .074, socketRadius: .0015, socketBottomY: .0715 },
+  blade: { count: 7, rootRadius: .0085, tipRadius: .034, thickness: .0009, rootPitch: .58, tipPitch: .27, radialSegments: 16, chordSegments: 8 },
+});
+
+export function probeBoreSpec(kind) {
+  if (!['heater', 'sink'].includes(kind)) throw new TypeError('Unknown probe body');
+  const body = GEOMETRY[kind], probe = kind === 'heater' ? GEOMETRY.probeHeater : GEOMETRY.probeSink;
+  return { kind, center: [probe.tip[0], probe.tip[1]], radius: DETAIL_GEOMETRY.probeBoreRadius,
+    frontZ: body.center[2] + body.size[2] / 2, bottomZ: probe.tip[2] - DETAIL_GEOMETRY.probeBottomClearance,
+    radialClearance: DETAIL_GEOMETRY.probeBoreRadius - probe.radius, bottomClearance: DETAIL_GEOMETRY.probeBottomClearance };
+}
