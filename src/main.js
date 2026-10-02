@@ -6,6 +6,9 @@ import { COMPONENTS, temperatureColor } from './geometry.js';
 import { ThermalScene } from './scene.js';
 import { LESSONS, createGuide, guideControlChange, lessonReady, confirmObservation, guideText } from './lessons.js';
 import { TemperatureChart } from './chart.js';
+import { thermalDetail } from './detail-model.js';
+import { ThermalDetailPanel } from './detail-panel.js';
+import './detail-panel.css';
 
 const $ = selector => document.querySelector(selector), $$ = selector => [...document.querySelectorAll(selector)];
 const text = (selector, value) => { $(selector).textContent = value; };
@@ -21,6 +24,8 @@ let chartDisplay = 'both';
 let storageBlocked = false, recoveredRaw = null, saveTimer, toastTimer;
 let running = false, frameId = null, lastTick = 0, lastPaint = 0, lastSave = 0, animationTimeS = 0;
 const chart = new TemperatureChart($('#temperature-chart'));
+const inspectionParts = new Set(['heater-block', 'probe-heater', 'heat-sink', 'probe-sink', 'cartridge-handle', 'fan-rotor', 'fan-frame', 'fan-guard', 'clamp-screws']);
+const detailPanel = new ThermalDetailPanel($('#thermal-details'), $('#part-facts'), $('#part-detail-note'), id => { selectPart(id); $('#part-name').scrollIntoView({ block: 'nearest' }); });
 
 function dismissToast() { clearTimeout(toastTimer); $('#toast').hidden = true; }
 function toast(message) {
@@ -30,7 +35,18 @@ function toast(message) {
   $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(dismissToast, 6000);
 }
 function returnToScene() { dismissToast(); requestAnimationFrame(() => $('#scene').scrollIntoView({ block: 'nearest', inline: 'nearest' })); }
-function capture() { return createProject({ experiment: run.exportExperiment(), comparison, playbackRate, view, camera: scene?.getCameraState() ?? initialCamera }); }
+function selectPart(id) {
+  if (!COMPONENTS.some(part => part.id === id)) throw new RangeError('Unknown thermal component');
+  view.selectedPart = id;
+  if (scene?.getInspection?.()) { if (inspectionParts.has(id)) scene.beginInspection(id); else scene.endInspection(); }
+  syncControls(); refresh(); scheduleSave();
+}
+function beginInspection(id = view.selectedPart) {
+  if (busy || !inspectionParts.has(id) || !scene?.beginInspection?.(id)) return false;
+  view.selectedPart = id; syncControls(); refresh(); returnToScene(); scheduleSave(); return true;
+}
+function endInspection() { scene?.endInspection?.(); refresh(); scheduleSave(); }
+function capture() { return createProject({ experiment: run.exportExperiment(), comparison, playbackRate, view, camera: scene?.getProjectCameraState?.() ?? scene?.getCameraState() ?? initialCamera }); }
 function saveLocal() {
   clearTimeout(saveTimer); if (storageBlocked || restoring) return;
   try { localStorage.setItem(STORAGE_KEY, serializeProject(capture())); text('#save-status', '이 기기에 자동 저장됨'); }
@@ -89,7 +105,7 @@ function setBusy(value) {
 function remember() { syncTime(); previous = { project: capture(), guide: copy(guide) }; $('#undo-new').hidden = false; }
 function readProject(project, restoredGuide = null) {
   const saved = parseProject(serializeProject(project)), nextRun = new ThermalRun(saved.experiment);
-  pause(); restoring = true;
+  pause(); scene?.endInspection?.(); restoring = true;
   try {
     run = nextRun; snapshot = run.getSnapshot(); ({ comparison, playbackRate } = saved);
     ({ view, camera: initialCamera } = saved.observation); guide = restoredGuide; animationTimeS = 0; chartDisplay = 'both';
@@ -98,7 +114,7 @@ function readProject(project, restoredGuide = null) {
   saveLocal();
 }
 function resetRun(config, { defaults = false } = {}) {
-  pause(); remember(); run = new ThermalRun(createExperiment(config)); snapshot = run.getSnapshot(); guide = null; animationTimeS = 0; chartDisplay = 'both';
+  pause(); remember(); scene?.endInspection?.(); run = new ThermalRun(createExperiment(config)); snapshot = run.getSnapshot(); guide = null; animationTimeS = 0; chartDisplay = 'both';
   if (defaults) { comparison = null; view = normalizeView(DEFAULT_VIEW); playbackRate = 60; }
   syncControls(); refresh(); if (defaults) scene?.resetCamera(); saveLocal();
   toast('25 °C에서 새 실험을 시작했습니다. 직전 실험은 되돌릴 수 있습니다.');
@@ -112,7 +128,7 @@ function changeConfig(patch) {
   const nextGuide = copy(guide); guideControlChange(nextGuide, next, snapshot);
   try {
     if (replacement) {
-      pause(); remember(); guide = nextGuide; run = new ThermalRun(createExperiment(next)); snapshot = run.getSnapshot(); animationTimeS = 0;
+      pause(); remember(); scene?.endInspection?.(); guide = nextGuide; run = new ThermalRun(createExperiment(next)); snapshot = run.getSnapshot(); animationTimeS = 0;
       toast('부품을 교체해 25 °C에서 다시 시작했습니다. 직전 실험은 되돌릴 수 있습니다.');
     } else { snapshot = run.changeControl({ powerW: next.powerW, fan: next.fan }); guide = nextGuide; }
   } catch (error) { toast(`조건을 바꾸지 못했습니다. ${error.message}`); }
@@ -129,7 +145,7 @@ function syncControls() {
 }
 function startLesson(id) {
   if (busy || !LESSONS[id]) return;
-  pause(); remember(); guide = createGuide(id); run = new ThermalRun(createExperiment(LESSONS[id].config)); snapshot = run.getSnapshot();
+  pause(); remember(); scene?.endInspection?.(); guide = createGuide(id); run = new ThermalRun(createExperiment(LESSONS[id].config)); snapshot = run.getSnapshot();
   comparison = null; view = normalizeView(DEFAULT_VIEW); playbackRate = 60; animationTimeS = 0; chartDisplay = 'both';
   syncControls(); refresh(); scene?.resetCamera(); saveLocal();
 }
@@ -160,6 +176,13 @@ const trend = rate => {
 };
 function refresh(renderScene = true) {
   if (renderScene) paintScene();
+  detailPanel.render(snapshot, view.selectedPart, running);
+  const inspection = scene?.getInspection?.();
+  $('#inspection-strip').hidden = !inspection;
+  $('#inspection-note').textContent = inspection?.note ?? '';
+  $('#inspect-part').disabled = !inspectionParts.has(view.selectedPart) || !scene?.beginInspection;
+  $('#inspect-part').setAttribute('aria-pressed', String(Boolean(inspection)));
+  text('#inspect-part', inspection ? '내부 관찰 마치기' : '내부 구조 자세히');
   $('#heater-temperature').replaceChildren(document.createTextNode(number(snapshot.heaterC)), Object.assign(document.createElement('small'), { textContent: ' °C' }));
   $('#sink-temperature').replaceChildren(document.createTextNode(number(snapshot.sinkC)), Object.assign(document.createElement('small'), { textContent: ' °C' }));
   text('#compact-heater', `${number(snapshot.heaterC)} °C`); text('#compact-sink', `${number(snapshot.sinkC)} °C`);
@@ -221,7 +244,7 @@ function toggleFocus() { focused = !focused; document.body.classList.toggle('foc
 $('#part-select').replaceChildren(...COMPONENTS.map(part => Object.assign(document.createElement('option'), { value: part.id, textContent: part.name })));
 $('#temperature-gradient').style.background = `linear-gradient(90deg,${temperatureColor(25)},${temperatureColor(65)} 47%,${temperatureColor(110)})`;
 try {
-  scene = new ThermalScene($('#scene'), { onSelect: id => { view.selectedPart = id; syncControls(); refresh(); scheduleSave(); }, onCameraChange: scheduleSave });
+  scene = new ThermalScene($('#scene'), { onSelect: selectPart, onCameraChange: scheduleSave });
   if (initialCamera) scene.setCameraState(initialCamera);
 } catch (error) { $('#scene-error').hidden = false; text('#scene-error', `3D 화면을 시작하지 못했습니다. ${error.message}`); }
 syncControls(); refresh(); if (!initialCamera) scene?.resetCamera();
@@ -230,9 +253,11 @@ $('#play').addEventListener('click', togglePlay); $('#step').addEventListener('c
 $('#reset').addEventListener('click', () => { if (!busy) resetRun(snapshot.config); });
 $('#playback-rate').addEventListener('change', event => { syncTime(); playbackRate = Number(event.target.value); refresh(); scheduleSave(); });
 for (const input of $$('[data-view]')) input.addEventListener('change', () => { view[input.dataset.view] = input.checked; refresh(); scheduleSave(); });
-for (const button of $$('[data-camera]')) button.addEventListener('click', () => { scene?.resetCamera(button.dataset.camera); returnToScene(); });
-$('#part-select').addEventListener('change', event => { view.selectedPart = event.target.value; refresh(); scheduleSave(); });
-$('#focus-part').addEventListener('click', () => { scene?.focusPart(view.selectedPart); returnToScene(); }); $('#focus').addEventListener('click', toggleFocus);
+for (const button of $$('[data-camera]')) button.addEventListener('click', () => { scene?.endInspection?.(); scene?.resetCamera(button.dataset.camera); refresh(false); returnToScene(); });
+$('#part-select').addEventListener('change', event => selectPart(event.target.value));
+$('#focus-part').addEventListener('click', () => { scene?.focusPart(view.selectedPart); refresh(false); returnToScene(); }); $('#focus').addEventListener('click', toggleFocus);
+$('#inspect-part').addEventListener('click', () => { if (scene?.getInspection?.()) endInspection(); else beginInspection(); });
+$('#end-inspection').addEventListener('click', endInspection);
 $('#part-action').addEventListener('click', () => { if (['heat-sink', 'cartridge-handle'].includes(view.selectedPart)) changeConfig({ module: snapshot.config.module === 'plate' ? 'fins' : 'plate' }); else if (view.selectedPart === 'contact-pad') changeConfig({ contact: snapshot.config.contact === 'good' ? 'poor' : 'good' }); else if (view.selectedPart.startsWith('fan-')) changeConfig({ fan: !snapshot.config.fan }); });
 for (const button of $$('[data-lesson]')) button.addEventListener('click', () => startLesson(button.dataset.lesson));
 $('#guide-next').addEventListener('click', guideNext); $('#guide-restart').addEventListener('click', () => { if (guide) startLesson(guide.id); });
@@ -259,4 +284,7 @@ window.thermalLab = {
   project: () => { syncTime(); return copy(capture()); },
   loadProject: raw => { const saved = parseProject(raw); remember(); readProject(saved); return copy(capture()); },
   step, sceneDebug: () => scene?.getDebug() ?? null, guide: () => copy(guide), chartDebug: () => copy(chart.debug),
+  getDetail: () => thermalDetail(snapshot), getInspection: () => scene?.getInspection?.() ?? null, beginInspection, endInspection,
 };
+window.render_game_to_text = () => JSON.stringify({ mode: running ? 'running' : 'paused', coordinateSystem: 'SI; x right, y up, z toward front. Temperatures are two lumped mean values.', snapshot, selectedPart: view.selectedPart, inspection: scene?.getInspection?.() ?? null, playbackRate, comparison: Boolean(comparison) });
+window.advanceTime = milliseconds => step(milliseconds / 1000);

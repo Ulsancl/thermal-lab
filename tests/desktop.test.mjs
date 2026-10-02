@@ -162,6 +162,65 @@ try {
     sameSnapshot((await state()).snapshot, new ThermalRun(saved.experiment).getSnapshot());
     assert.equal((await state()).running, false);
   });
+  await check('native component details read the replayed state and leave original experiment and comparison untouched', async () => {
+    const before = await project(), snapshot = (await state()).snapshot;
+    const detail = await page.evaluate(() => window.thermalLab.getDetail());
+    const expected = {
+      'power.inputW': snapshot.config.powerW,
+      'power.contactW': (snapshot.heaterC - snapshot.sinkC) / snapshot.parameters.contactResistanceKPerW,
+      'power.airW': snapshot.parameters.airConductanceWPerK * (snapshot.sinkC - snapshot.parameters.ambientC),
+      'energy.heaterJ': snapshot.parameters.heaterCapacityJPerK * (snapshot.heaterC - snapshot.parameters.ambientC),
+      'energy.sinkJ': snapshot.parameters.sinkCapacityJPerK * (snapshot.sinkC - snapshot.parameters.ambientC),
+    };
+    for (const [key, value] of Object.entries(expected)) {
+      const actual = Number(await page.locator(`#thermal-details [data-value="${key}"]`).first().getAttribute('data-raw'));
+      assert.ok(Math.abs(actual - value) < 1e-8, `${key}: ${actual} != ${value}`);
+    }
+    assert.ok(Math.abs(detail.power.inputW - detail.power.airW - detail.power.totalStorageW) < 1e-10);
+    await page.locator('#part-select').selectOption('probe-heater');
+    const facts = await page.locator('#part-facts > div').evaluateAll(rows => Object.fromEntries(rows.map(row => [row.querySelector('dt').textContent, row.querySelector('dd').dataset.raw])));
+    assert.equal(Number(facts['블록 평균온도']), snapshot.heaterC);
+    assert.equal(Number(facts['블록 변화율']), snapshot.heaterRateKPerS);
+    assert.match(await page.locator('#thermal-rate-note').textContent(), /일시정지/);
+    await delay(100); assert.deepEqual((await state()).snapshot, snapshot);
+    await page.locator('#part-select').selectOption(before.observation.view.selectedPart);
+    sameProject(await project(), before);
+  });
+  await check('native inspection save records the original camera and opening that file restores full structure', async () => {
+    await page.locator('#part-select').selectOption('heater-block');
+    const original = await project(); await page.locator('#inspect-part').click();
+    const scene = await page.evaluate(() => window.thermalLab.sceneDebug());
+    assert.equal(scene.inspection.kind, 'heater');
+    assert.deepEqual(scene.mechanical.visibleParts, ['heater-block', 'probe-heater']);
+    assert.equal(scene.mechanical.sectionIsCapped, true);
+    assert.notDeepEqual(scene.camera, original.observation.camera);
+    assert.deepEqual(scene.projectCamera, original.observation.camera);
+    await page.locator('#exploded').uncheck(); await page.locator('#temperature').check();
+    const savedInspection = await project();
+    assert.deepEqual(savedInspection.observation.camera, original.observation.camera);
+    assert.deepEqual(savedInspection.experiment, original.experiment);
+    assert.deepEqual(savedInspection.comparison, original.comparison);
+    const file = path.join(evidence, '내부 관찰 원래 시점.thermal.json');
+    await saveDialog(file); await freshToast(() => page.locator('#save-project').click(), '저장했습니다');
+    assert.equal(await app.evaluate(() => globalThis.thermalSaveCalls), 1);
+    sameProject(JSON.parse(await fs.readFile(file, 'utf8')), savedInspection);
+    assert.equal((await page.evaluate(() => window.thermalLab.getInspection())).kind, 'heater');
+    await openDialog(file, true); await freshToast(() => page.locator('#open-project').click(), '열기를 취소');
+    assert.equal((await page.evaluate(() => window.thermalLab.getInspection())).kind, 'heater');
+    sameProject(await project(), savedInspection);
+    await page.screenshot({ path: path.join(evidence, 'native-inspection.png') });
+    await openDialog(file); await freshToast(() => page.locator('#open-project').click(), '복원했습니다');
+    assert.equal(await page.evaluate(() => window.thermalLab.getInspection()), null);
+    assert.equal(await page.locator('#inspection-strip').isVisible(), false);
+    const restored = await page.evaluate(() => window.thermalLab.sceneDebug());
+    assert.equal(restored.mechanical.visibleParts.length, 16);
+    assert.equal(restored.mechanical.sectionIsCapped, false);
+    sameProject(await project(), savedInspection);
+    assert.deepEqual(restored.camera, savedInspection.observation.camera);
+    // Keep the existing remainder of the native suite on its original imported fixture.
+    await openDialog(projectPath); await freshToast(() => page.locator('#open-project').click(), '복원했습니다');
+    sameProject(await project(), saved);
+  });
   await check('step advances exactly 60 model seconds and native play/pause preserves event history', async () => {
     const before = await state(), replay = new ThermalRun(before.experiment);
     replay.advance(60); await page.locator('#step').click();
