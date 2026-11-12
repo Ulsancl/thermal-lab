@@ -30,7 +30,7 @@ else if (mode === 'package') {
   const configuration = JSON.parse(readInput(root, path.join(root, 'electron-builder.json')));
   const packageInfo = JSON.parse(readInput(root, path.join(root, 'package.json')));
   try {
-    const inputs = [...new Set(['desktop', 'dist', 'package.json', ...configuration.extraResources.map(item => item.from)])];
+    const inputs = [...new Set(['desktop', 'dist', 'package.json', configuration.directories.buildResources, ...configuration.files.filter(file => !file.includes('*')), ...configuration.extraResources.map(item => item.from)])];
     for (const input of inputs.filter(file => !inputs.some(parent => file !== parent && file.startsWith(parent + '/')))) {
       copyInput(root, path.join(root, input), path.join(app, input));
     }
