@@ -1,3 +1,4 @@
+import { artifactDirectory } from '../scripts/safe-files.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -7,7 +8,8 @@ import { ThermalRun, createExperiment } from '../src/experiment.js';
 import { DEFAULT_CONFIG } from '../src/model.js';
 import { createProject, serializeProject } from '../src/project.js';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'output/consumer');
+const root = path.resolve(import.meta.dirname, '..');
+const output = artifactDirectory(root, path.join(root, 'output/consumer'));
 const hardware = process.env.THERMAL_BROWSER_HARDWARE === '1';
 const checks = [], errors = [], externalRequests = [], evidence = [];
 let server, browser, page, gpu, failure;

@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5230 --strictPort",
     "build": "vite build",
-    "test": "node --test tests/model.test.mjs tests/experiment.test.mjs tests/geometry.test.mjs tests/project.test.mjs tests/atomic-save.test.mjs tests/lessons.test.mjs tests/detail-model.test.mjs tests/scene-detail.test.mjs",
+    "test": "node --test tests/model.test.mjs tests/experiment.test.mjs tests/geometry.test.mjs tests/project.test.mjs tests/atomic-save.test.mjs tests/lessons.test.mjs tests/detail-model.test.mjs tests/scene-detail.test.mjs tests/safe-files.test.mjs",
     "test:browser": "node tests/browser.test.mjs",
     "desktop": "node scripts/desktop.mjs start",
     "package:desktop": "node scripts/desktop.mjs package",
@@ -22,9 +22,12 @@
     "three": "0.180.0"
   },
   "devDependencies": {
-    "electron": "44.5.1",
+    "electron": "44.11.1",
     "electron-builder": "26.15.3",
     "playwright": "1.63.0",
-    "vite": "7.3.6"
+    "vite": "7.3.8"
+  },
+  "overrides": {
+    "minimatch@>=7 <11.0.1": "^11.0.8"
   }
 }

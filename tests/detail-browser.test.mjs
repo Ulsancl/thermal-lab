@@ -1,3 +1,4 @@
+import { artifactDirectory } from '../scripts/safe-files.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -9,7 +10,8 @@ import { COMPONENTS } from '../src/geometry.js';
 import { createProject, serializeProject } from '../src/project.js';
 import { thermalDetail, describeThermalDetail } from '../src/detail-model.js';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'output/detail-browser');
+const root = path.resolve(import.meta.dirname, '..');
+const output = artifactDirectory(root, path.join(root, 'output/detail-browser'));
 await fs.mkdir(output, { recursive: true });
 const server = await createServer({ root, server: { host: '127.0.0.1', port: 5236, strictPort: true, hmr: false } });
 await server.listen();

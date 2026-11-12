@@ -1,3 +1,4 @@
+import { artifactDirectory } from '../scripts/safe-files.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -14,7 +15,7 @@ const expectedVersion = JSON.parse(await fs.readFile(path.join(root, 'package.js
 const packaged = !!process.env.THERMAL_DESKTOP_EXE;
 const executablePath = packaged ? process.env.THERMAL_DESKTOP_EXE : require('electron');
 assert.ok(path.isAbsolute(executablePath), 'The tested executable must be an absolute path');
-const output = path.join(root, 'output', `${packaged ? 'desktop-packaged' : 'desktop'}-v${expectedVersion}`);
+const output = artifactDirectory(root, path.join(root, 'output', `${packaged ? 'desktop-packaged' : 'desktop'}-v${expectedVersion}`));
 await fs.mkdir(output, { recursive: true });
 const profile = await fs.mkdtemp(path.join(output, 'profile-'));
 const evidence = path.join(profile, 'test-artifacts');
