@@ -45,11 +45,55 @@ async function parity() {
 }
 try {
   await page.goto('http://127.0.0.1:5231/'); await page.waitForFunction(() => window.thermalLab?.sceneDebug()?.ready);
+  await check('a stale tab cannot overwrite a newer saved comparison on unload', async () => {
+    const tabs = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+    const key = 'thermal-lab-project-v1';
+    const open = async () => {
+      const tab = await tabs.newPage();
+      await tab.goto(page.url());
+      await tab.waitForFunction(() => window.thermalLab?.getState());
+      return tab;
+    };
+    const flush = tab => tab.evaluate(() => { window.dispatchEvent(new Event('beforeunload')); });
+    const stored = tab => tab.evaluate(key => localStorage.getItem(key), key);
+    try {
+      const writer = await open();
+      await flush(writer);
+      const stale = await open();
+      assert.equal(await stale.evaluate(() => window.thermalLab.getState().comparison), null);
+      await writer.locator('#pin-comparison').click();
+      await flush(writer);
+      const newer = await stored(writer);
+      assert.ok(JSON.parse(newer).comparison);
+      await flush(stale);
+      assert.equal(await stored(stale), newer);
+      assert.match(await stale.locator('#save-status').innerText(), /다른 (?:창|탭)/);
+      // This tab still owns its in-memory work and may export it separately.
+      assert.equal(await stale.evaluate(() => window.thermalLab.project().comparison), null);
+      assert.equal(await stale.locator('#save-project').isEnabled(), true);
+      await stale.reload();
+      await stale.waitForFunction(() => window.thermalLab?.getState().comparison);
+      assert.deepEqual(await stale.evaluate(() => window.thermalLab.getState().comparison), JSON.parse(newer).comparison);
+    } finally { await tabs.close(); }
+  });
+
   await check('offline bench starts paused at ambient with sixteen physical parts and on-demand WebGL', async () => {
     const initial = await state(); assert.equal(initial.running, false); assert.deepEqual(initial.snapshot.config, DEFAULT_CONFIG); assert.equal(initial.snapshot.heaterC, 25); assert.equal(initial.snapshot.timeS, 0); assert.equal((await debug()).componentCount, 16);
     gpu = await page.evaluate(() => { const gl = document.querySelector('#scene canvas').getContext('webgl2'), ext = gl.getExtension('WEBGL_debug_renderer_info'); return { webgl2: !!gl, renderer: gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) }; });
     if (hardware) assert.match(gpu.renderer, /RTX 5080.*D3D11|D3D11.*RTX 5080/);
     await paint(); const before = await debug(); await page.waitForTimeout(150); assert.equal((await debug()).renderFrame, before.renderFrame); await parity();
+  });
+  await check('web help is reachable and pauses playback until the user resumes', async () => {
+    await page.locator('#play').click();
+    assert.equal((await state()).running, true);
+    await page.getByRole('button', { name: '도움말', exact: true }).click();
+    assert.equal(await page.getByRole('dialog').isVisible(), true);
+    assert.equal((await state()).running, false);
+    await page.locator('#close-help').click();
+    assert.equal(await page.getByRole('dialog').isVisible(), false);
+    assert.equal((await state()).running, false);
+    await page.locator('#new-project').click();
+    await page.getByRole('button', { name: '알림 닫기' }).click();
   });
   await check('step buttons advance actual model time and power-off preserves continuous temperatures', async () => {
     await page.locator('#step').click(); assert.equal((await state()).snapshot.timeS, 60); await page.locator('#step-large').click(); assert.equal((await state()).snapshot.timeS, 360); await parity();
@@ -133,13 +177,18 @@ try {
     const raw = '\ufeff{"type":"thermal-lab-project","schemaVersion":99,"untouched":"한글 원문"}';
     await other.addInitScript(raw => { if (location.hostname === '127.0.0.1') localStorage.setItem('thermal-lab-project-v1', raw); }, raw); await other.goto('http://127.0.0.1:5231/'); await other.waitForFunction(() => window.thermalLab?.sceneDebug()?.ready && !document.querySelector('#storage-recovery').hidden);
     await other.locator('#step').click(); assert.equal(await other.evaluate(() => localStorage.getItem('thermal-lab-project-v1')), raw);
+    await other.reload();
+    await other.waitForFunction(() => window.thermalLab && !document.querySelector('#storage-recovery').hidden);
+    const backups = await other.evaluate(() => Object.keys(localStorage)
+      .filter(key => key.startsWith('thermal-lab-project-v1-original-')).map(key => localStorage.getItem(key)));
+    assert.deepEqual(backups, [raw], 'reloading the same protected original must not consume another quota entry');
     const pending = other.waitForEvent('download'); await other.locator('#recover-original').click(); const file = path.join(output, 'protected-original.txt'); await (await pending).saveAs(file); assert.equal(await fs.readFile(file, 'utf8'), raw); await isolated.close();
   });
   await check('desktop and narrow layouts expose live readings, controls and scene without horizontal overflow', async () => {
     await page.locator('#new-project').click(); if (await page.locator('#toast').isVisible()) await page.getByRole('button', { name: '알림 닫기' }).click();
     for (const [width, height] of [[1600, 1000], [1280, 720], [390, 844]]) {
       await page.setViewportSize({ width, height }); await page.locator('#reset-camera').click(); await paint(); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth) <= 1, `overflow at ${width}`);
-      for (const id of ['module', 'contact', 'power', 'fan', 'play', 'step', 'save-project', 'part-select']) assert.equal(await page.locator(`#${id}`).isVisible(), true);
+      for (const id of ['module', 'contact', 'power', 'fan', 'play', 'step', 'save-project', 'help', 'part-select']) assert.equal(await page.locator(`#${id}`).isVisible(), true);
       await page.screenshot({ path: path.join(output, `thermal-${width}.png`), fullPage: true });
     }
     await select('module', 'fins'); await select('power', 8); const live = await page.locator('.compact-readings').boundingBox(); assert.ok(live.y >= 0 && live.y + live.height <= 844, 'live temperatures remain beside narrow controls');
