@@ -47,21 +47,37 @@ function beginInspection(id = view.selectedPart) {
 }
 function endInspection() { scene?.endInspection?.(); refresh(); scheduleSave(); }
 function capture() { return createProject({ experiment: run.exportExperiment(), comparison, playbackRate, view, camera: scene?.getProjectCameraState?.() ?? scene?.getCameraState() ?? initialCamera }); }
+// Bytes last read or written by this tab. A stale unload must not replace another tab's experiment.
+let lastStoredRaw = null;
 function saveLocal() {
-  clearTimeout(saveTimer); if (storageBlocked || restoring) return;
-  try { localStorage.setItem(STORAGE_KEY, serializeProject(capture())); text('#save-status', '이 기기에 자동 저장됨'); }
-  catch { text('#save-status', '자동 저장을 완료하지 못했습니다 · 파일로 보관하세요'); }
+  clearTimeout(saveTimer);
+  if (storageBlocked || restoring) return;
+  try {
+    const contents = serializeProject(capture()), stored = localStorage.getItem(STORAGE_KEY);
+    if (stored !== lastStoredRaw && stored !== contents) {
+      storageBlocked = true;
+      text('#save-status', '다른 탭에서 자동 저장이 변경됨 · 이 탭의 실험은 파일로 저장한 뒤 새로고침하세요');
+      return;
+    }
+    if (stored !== contents) localStorage.setItem(STORAGE_KEY, contents);
+    lastStoredRaw = contents;
+    text('#save-status', '이 기기에 자동 저장됨');
+  } catch { text('#save-status', '자동 저장을 완료하지 못했습니다 · 파일로 보관하세요'); }
 }
 function scheduleSave() { if (!restoring && !storageBlocked) { clearTimeout(saveTimer); saveTimer = setTimeout(saveLocal, 230); } }
 function protectOriginal(raw, future) {
   recoveredRaw = raw; storageBlocked = true;
-  try { localStorage.setItem(`${STORAGE_KEY}-original-${Date.now()}`, raw); } catch { /* Keep the in-memory original available for download. */ }
+  try {
+    const prefix = `${STORAGE_KEY}-original-`;
+    const backedUp = Object.keys(localStorage).some(k => k.startsWith(prefix) && localStorage.getItem(k) === raw);
+    if (!backedUp) localStorage.setItem(`${prefix}${Date.now()}`, raw);
+  } catch { /* The primary record and its in-memory download remain untouched. */ }
   $('#storage-recovery').hidden = false;
   if (future) text('#storage-recovery strong', '더 새로운 버전의 실험입니다. 기존 원문을 보존합니다.');
   text('#save-status', '자동 저장 원문 보호 중 · 현재 실험은 파일로 보관하세요');
 }
 try {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(STORAGE_KEY); lastStoredRaw = raw;
   if (raw !== null) try {
     const saved = parseProject(raw); run = new ThermalRun(saved.experiment); snapshot = run.getSnapshot();
     ({ comparison, playbackRate } = saved); ({ view, camera: initialCamera } = saved.observation);
@@ -273,8 +289,13 @@ $('#project-file').addEventListener('change', async event => {
   catch (error) { toast(`열지 못했습니다. ${error.message}`); } finally { event.target.value = ''; setBusy(false); }
 });
 $('#recover-original').addEventListener('click', () => { if (recoveredRaw !== null) browserDownload(recoveredRaw, 'thermal-lab-original.txt', 'text/plain;charset=utf-8'); });
+function showHelp() {
+  if (busy || $('#help-dialog').open) return;
+  pause(); $('#help-dialog').showModal();
+}
+$('#help').addEventListener('click', showHelp);
 $('#close-help').addEventListener('click', () => $('#help-dialog').close());
-desktop?.onCommand(command => { if (busy) return; if (command === 'new-project') newExperiment(); else if (command === 'open-project') openFile(); else if (command === 'save-project') saveFile(); else if (command === 'toggle-play') togglePlay(); else if (command === 'focus') toggleFocus(); else if (command === 'help') { pause(); $('#help-dialog').showModal(); } });
+desktop?.onCommand(command => { if (busy) return; if (command === 'new-project') newExperiment(); else if (command === 'open-project') openFile(); else if (command === 'save-project') saveFile(); else if (command === 'toggle-play') togglePlay(); else if (command === 'focus') toggleFocus(); else if (command === 'help') showHelp(); });
 window.addEventListener('beforeunload', () => { syncTime(); saveLocal(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
 $('#sample-details').addEventListener('toggle', renderSamples);
