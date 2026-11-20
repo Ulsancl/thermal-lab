@@ -78,13 +78,14 @@ try {
       for (const tab of [first, second]) assert.equal(await tab.evaluate(() => window.thermalLab.getState().experiment.elapsedS), 60);
       // The native lock is already held while two different client IDs queue.
       // This is a controlled concurrent overlap, not just sequential stale saves.
-      await holder.evaluate(name => new Promise((ready, fail) => {
+      const holdAutosaveLock = () => holder.evaluate(name => new Promise((ready, fail) => {
         navigator.locks.request(name, () => new Promise(resolve => {
           window.releaseAutosaveTestLock = resolve;
           ready();
         })).catch(fail);
       }), lockName);
-      const waitForPending = count => until(async () => {
+      await holdAutosaveLock();
+      const waitForPending = (count, reference = original) => until(async () => {
         const observed = await holder.evaluate(async ({name, key}) => {
           const { pending, held } = await navigator.locks.query();
           return {
@@ -92,7 +93,7 @@ try {
             clients: new Set(pending.filter(lock => lock.name === name).map(lock => lock.clientId)).size,
           };
         }, { name: lockName, key: storageKey });
-        assert.equal(observed.stored, original, 'must not write while another tab holds the lock');
+        assert.equal(observed.stored, reference, 'must not write while another tab holds the lock');
         return observed.locked && observed.clients === count;
       }, `expected ${count} distinct pending clients behind the held lock`);
       // Queue in a fixed order, while both writers still have the same baseline.
@@ -125,6 +126,38 @@ try {
       await second.reload();
       await second.waitForFunction(() => window.thermalLab?.getState().experiment.elapsedS === 180);
       assert.equal(await second.locator('#autosave-recovery').isHidden(), true);
+      // Hold the disk-writing lock through a real reload. The tab-local
+      // journal must retain the edit even though it cannot be on disk yet.
+      await holdAutosaveLock();
+      await stepTab(second);
+      await waitForPending(1, winner);
+      const journalProject = await second.evaluate(() => window.thermalLab.project());
+      await second.reload();
+      await second.waitForFunction(expected => window.thermalLab && JSON.stringify(window.thermalLab.project()) === expected,
+        JSON.stringify(journalProject));
+      assert.equal(await stored(second), winner);
+      await holder.evaluate(() => window.releaseAutosaveTestLock());
+      await until(async () => JSON.stringify(JSON.parse(await stored(second))) === JSON.stringify(journalProject),
+        'replayed tab draft must finish the ordinary locked save');
+      const latest = await stored(second);
+
+      // Model an interrupted prior navigation whose comparison baseline is
+      // now stale. A strict reload must keep the latest shared record active.
+      await second.evaluate(({ key, expected, contents }) => {
+        sessionStorage.setItem(`${key}:tab-draft`, JSON.stringify({ version: 1, expected, contents, interrupted: false }));
+      }, { key: storageKey, expected: original, contents: JSON.stringify(expectedFile) });
+      await second.reload();
+      await second.waitForFunction(() => window.thermalLab && !document.querySelector('#tab-draft-recovery').hidden);
+      assert.deepEqual(await second.evaluate(() => window.thermalLab.project()), journalProject);
+      assert.equal(await stored(second), latest);
+      assert.equal(await second.evaluate(key => JSON.parse(sessionStorage.getItem(`${key}:tab-draft`)).interrupted, storageKey), true);
+      const interrupted = second.waitForEvent('download');
+      await second.locator('#export-interrupted-draft').click();
+      const recovered = await interrupted;
+      const recoveryPath = path.join(output, 'interrupted-autosave.json');
+      await recovered.saveAs(recoveryPath);
+      assert.deepEqual(JSON.parse(await fs.readFile(recoveryPath, 'utf8')), expectedFile);
+      assert.equal(await stored(second), latest);
       // Continuous model time is dirty even between the periodic save ticks.
       await second.locator('#play').click();
       assert.equal(await exitsWithWarning(second), true);

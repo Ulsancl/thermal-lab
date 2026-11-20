@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autosaveLockName, createBrowserAutosave, writeIfUnchanged } from '../src/browser-autosave.js';
+import { autosaveLockName, createBrowserAutosave, writeIfUnchanged, readTabDraft, writeTabDraft, clearTabDraft } from '../src/browser-autosave.js';
 
 const key = 'lab-project-v1';
 function fixture(base = 'baseline') {
@@ -10,6 +10,31 @@ function fixture(base = 'baseline') {
     setItem: (name, contents) => { writes.push(contents); rows.set(name, contents); },
   }) };
 }
+
+test('tab draft storage is independent, validates the envelope and fails closed if it is unavailable', () => {
+  const records = new Map();
+  const session = () => ({
+    getItem: name => records.get(name) ?? null,
+    setItem: (name, value) => records.set(name, value),
+    removeItem: name => records.delete(name),
+  });
+  const denied = () => { throw new Error('session quota or permissions'); };
+  const record = { expected: 'old bytes', contents: 'unsaved bytes', interrupted: false };
+  assert.equal(writeTabDraft(denied, key, record), false);
+  assert.equal(readTabDraft(denied, key), null);
+  assert.doesNotThrow(() => clearTabDraft(denied, key));
+  assert.equal(writeTabDraft(session, key, record), true);
+  assert.deepEqual(readTabDraft(session, key), { version: 1, ...record });
+  clearTabDraft(session, key, 'a different tab snapshot');
+  assert.equal(readTabDraft(session, key).contents, record.contents);
+  clearTabDraft(session, key, record.contents);
+  assert.equal(readTabDraft(session, key), null);
+  for (const bad of ['{', JSON.stringify({ ...record, version: 99 }), JSON.stringify({ ...record, version: 1, expected: 42 }),
+    JSON.stringify({ ...record, version: 1, interrupted: 'yes' }), JSON.stringify({ ...record, version: 1, extra: true })]) {
+    records.set(`${key}:tab-draft`, bad);
+    assert.equal(readTabDraft(session, key), null);
+  }
+});
 
 test('compare and write keeps divergent disk bytes and avoids redundant writes', () => {
   const { storage, writes } = fixture('other tab');

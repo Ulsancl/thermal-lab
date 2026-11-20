@@ -2,6 +2,7 @@
 <html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#13242b"><title>Thermal Lab · 방열판 실험대</title></head>
 <body>
 <header><div class="brand"><span class="brand-mark" aria-hidden="true">▥</span><div><h1>Thermal Lab <small>방열판 실험대</small></h1><p>저장되는 열, 빠져나가는 열. 부품을 바꿔 차이를 관찰하세요.</p></div></div><nav aria-label="실험 파일과 도움말"><button id="new-project">새 실험</button><button id="open-project">실험 열기</button><button id="save-project" class="accent">실험 저장</button><button id="help" aria-haspopup="dialog" aria-controls="help-dialog">도움말</button><input id="project-file" type="file" accept=".json,application/json" hidden></nav></header>
+<aside id="tab-draft-recovery" class="recovery" aria-labelledby="tab-draft-title" hidden><strong id="tab-draft-title">자동 저장되지 않은 이전 실험이 남아 있어요.</strong><p>다른 실험이 저장되었거나 자동 저장을 사용할 수 없어 지금 화면에는 적용하지 않았습니다. 이전 실험을 별도 파일로 내려받을 수 있습니다.</p><button id="export-interrupted-draft" type="button">이전 실험 복구 사본 내려받기</button></aside>
 <aside id="autosave-recovery" class="recovery" aria-labelledby="autosave-title" hidden><div role="status"><strong id="autosave-title"></strong><p id="autosave-hint"></p></div><button id="export-unsaved-project" type="button">이 탭의 실험 내려받기</button></aside>
 <aside id="storage-recovery" class="recovery" hidden><strong>자동 저장 원문을 보호하고 있습니다.</strong><p>원래 기록을 따로 내보내고 현재 실험은 새 파일로 보관하세요.</p><button id="recover-original">보호된 원문 내보내기</button></aside>
 <main class="lab-grid">
