@@ -2,6 +2,7 @@ import './style.css';
 import { DEFAULT_CONFIG, normalizeConfig } from './model.js';
 import { ThermalRun, createExperiment } from './experiment.js';
 import { createProject, parseProject, serializeProject, normalizeView, DEFAULT_VIEW } from './project.js';
+import { createBrowserAutosave, supportsAutosaveLock, withAutosaveLock, writeIfUnchanged } from './browser-autosave.js';
 import { COMPONENTS, temperatureColor } from './geometry.js';
 import { ThermalScene } from './scene.js';
 import { LESSONS, createGuide, guideControlChange, lessonReady, confirmObservation, guideText } from './lessons.js';
@@ -47,33 +48,92 @@ function beginInspection(id = view.selectedPart) {
 }
 function endInspection() { scene?.endInspection?.(); refresh(); scheduleSave(); }
 function capture() { return createProject({ experiment: run.exportExperiment(), comparison, playbackRate, view, camera: scene?.getProjectCameraState?.() ?? scene?.getCameraState() ?? initialCamera }); }
-// Bytes last read or written by this tab. A stale unload must not replace another tab's experiment.
-let lastStoredRaw = null;
+let lastStoredRaw = null, browserAutosave = null, guardArmed = false;
+const getBrowserLocks = () => { try { return navigator.locks; } catch { return undefined; } };
+const currentProjectText = () => serializeProject(capture());
+const autosaveIssues = {
+  conflict: ['다른 탭에서 저장한 실험을 보호했어요.', '이 탭의 변경은 자동 저장하지 않습니다. 아래에서 이 탭의 실험을 내려받고, 최신에 저장된 실험을 보려면 새로고침하세요.', '다른 탭에서 자동 저장이 변경됨 · 이 탭의 실험은 파일로 보관하세요'],
+  unavailable: ['이 환경에서는 안전한 자동 저장을 사용할 수 없어요.', '기존 자동 저장 기록을 덮어쓰지 않습니다. 변경한 실험은 아래에서 파일로 내려받으세요.', '안전한 자동 저장을 사용할 수 없음 · 파일로 보관하세요'],
+  failed: ['자동 저장을 완료하지 못했어요.', '현재 실험을 잃지 않으려면 아래에서 파일로 내려받으세요.', '자동 저장을 완료하지 못했습니다 · 파일로 보관하세요'],
+};
+function warnOnUnsavedExit(event) {
+  try { if (!running && !browserAutosave.hasUnsavedChanges()) return; } catch { /* The current experiment could not be checked. */ }
+  event.preventDefault();
+  event.returnValue = true;
+}
+function armUnloadGuard() {
+  if (desktop || !browserAutosave || guardArmed) return;
+  guardArmed = true;
+  window.addEventListener('beforeunload', warnOnUnsavedExit);
+}
+function disarmUnloadGuard() {
+  guardArmed = false;
+  window.removeEventListener('beforeunload', warnOnUnsavedExit);
+}
+function reportAutosave(status) {
+  if (status === 'saved' || status === 'unchanged') {
+    if (!running) disarmUnloadGuard();
+    $('#autosave-recovery').hidden = true;
+    text('#save-status', status === 'saved' ? '이 기기에 자동 저장됨' : '자동 저장할 변경 없음');
+    return;
+  }
+  const [title, hint, footer] = autosaveIssues[status];
+  text('#autosave-title', title); text('#autosave-hint', hint); text('#save-status', footer);
+  $('#autosave-recovery').hidden = false;
+}
 function saveLocal() {
   clearTimeout(saveTimer);
-  if (storageBlocked || restoring) return;
+  if (restoring) return;
+  if (!desktop) {
+    armUnloadGuard();
+    if (!storageBlocked && browserAutosave?.canSave()) {
+      text('#save-status', '자동 저장 확인 중');
+      void browserAutosave.flush();
+    }
+    return;
+  }
+  if (storageBlocked) return;
   try {
-    const contents = serializeProject(capture()), stored = localStorage.getItem(STORAGE_KEY);
-    if (stored !== lastStoredRaw && stored !== contents) {
+    const contents = currentProjectText();
+    // The installed app uses its existing single-instance, synchronous path.
+    if (!writeIfUnchanged(localStorage, STORAGE_KEY, lastStoredRaw, contents)) {
       storageBlocked = true;
-      text('#save-status', '다른 탭에서 자동 저장이 변경됨 · 이 탭의 실험은 파일로 저장한 뒤 새로고침하세요');
+      reportAutosave('conflict');
       return;
     }
-    if (stored !== contents) localStorage.setItem(STORAGE_KEY, contents);
     lastStoredRaw = contents;
-    text('#save-status', '이 기기에 자동 저장됨');
-  } catch { text('#save-status', '자동 저장을 완료하지 못했습니다 · 파일로 보관하세요'); }
+    reportAutosave('saved');
+  } catch { reportAutosave('failed'); }
 }
-function scheduleSave() { if (!restoring && !storageBlocked) { clearTimeout(saveTimer); saveTimer = setTimeout(saveLocal, 230); } }
+function scheduleSave() {
+  if (restoring) return;
+  armUnloadGuard();
+  if (storageBlocked || (!desktop && !browserAutosave?.canSave())) return;
+  if (!desktop) text('#save-status', '자동 저장 확인 중');
+  clearTimeout(saveTimer); saveTimer = setTimeout(saveLocal, 230);
+}
+function flushBrowserOnHide() {
+  if (guardArmed && !restoring && !storageBlocked && browserAutosave?.canSave()) {
+    clearTimeout(saveTimer);
+    void browserAutosave.flush();
+  }
+}
 function protectOriginal(raw, future) {
-  recoveredRaw = raw; storageBlocked = true;
-  try {
+  storageBlocked = true; recoveredRaw = raw;
+  const backup = () => {
     const prefix = `${STORAGE_KEY}-original-`;
     const backedUp = Object.keys(localStorage).some(k => k.startsWith(prefix) && localStorage.getItem(k) === raw);
     if (!backedUp) localStorage.setItem(`${prefix}${Date.now()}`, raw);
-  } catch { /* The primary record and its in-memory download remain untouched. */ }
+  };
+  // Recovery remains available from the primary record and in memory, even
+  // when backup storage is full or browser coordination is unavailable.
+  if (desktop) { try { backup(); } catch { /* Keep the original. */ } }
+  else {
+    const locks = getBrowserLocks();
+    if (supportsAutosaveLock(locks)) void withAutosaveLock(locks, STORAGE_KEY, backup).catch(() => {});
+  }
   $('#storage-recovery').hidden = false;
-  if (future) text('#storage-recovery strong', '더 새로운 버전의 실험입니다. 기존 원문을 보존합니다.');
+  if (future) text('#storage-recovery strong', '더 새로운 버전의 실험입니다. 원문을 보존합니다.');
   text('#save-status', '자동 저장 원문 보호 중 · 현재 실험은 파일로 보관하세요');
 }
 try {
@@ -82,7 +142,7 @@ try {
     const saved = parseProject(raw); run = new ThermalRun(saved.experiment); snapshot = run.getSnapshot();
     ({ comparison, playbackRate } = saved); ({ view, camera: initialCamera } = saved.observation);
   } catch (error) { protectOriginal(raw, error.futureVersion); }
-} catch { storageBlocked = true; text('#save-status', '자동 저장을 사용할 수 없습니다 · 파일로 보관하세요'); }
+} catch { storageBlocked = true; reportAutosave('unavailable'); }
 
 // Account for the full elapsed interval under the old controls before any change.
 function syncTime(now = performance.now()) {
@@ -107,7 +167,7 @@ function togglePlay() {
   if (busy) return;
   if (running) { pause(); return; }
   if (snapshot.atLimit) { toast('2시간 기록을 마쳤습니다. 25 °C에서 다시 시작하세요.'); return; }
-  running = true; lastTick = performance.now(); lastSave = lastTick; refresh(); frameId = requestAnimationFrame(frame);
+  running = true; armUnloadGuard(); lastTick = performance.now(); lastSave = lastTick; refresh(); frameId = requestAnimationFrame(frame);
 }
 function step(seconds) {
   if (busy) return copy(snapshot);
@@ -239,12 +299,31 @@ function browserDownload(contents, name, mime = 'application/json;charset=utf-8'
   const url = URL.createObjectURL(new Blob([contents], { type: mime }));
   Object.assign(document.createElement('a'), { href: url, download: name }).click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+function projectFilename(suffix = '') {
+  return `thermal-lab-${new Date().toISOString().slice(0,10)}${suffix}.json`;
+}
+function downloadBrowserProject(contents, filename) {
+  browserDownload(contents, filename);
+  // The browser owns the download prompt; this records the snapshot offered
+  // to it, not a guarantee that the user kept the file.
+  browserAutosave.markExported(contents);
+  if (!running) disarmUnloadGuard();
+}
+function exportUnsavedProject() {
+  if (busy) return;
+  if (desktop) { void saveFile(); return; }
+  try {
+    syncTime();
+    downloadBrowserProject(currentProjectText(), projectFilename('-recovered'));
+    toast('내려받은 실험 파일을 확인한 뒤 새로고침하세요.');
+  } catch (error) { toast(`내려받지 못했습니다. ${error.message}`); }
+}
 async function saveFile() {
   if (busy) return; setBusy(true);
   try {
-    const contents = serializeProject(capture()), name = `thermal-lab-${new Date().toISOString().slice(0, 10)}.json`;
+    const contents = currentProjectText(), name = projectFilename();
     if (desktop) { const result = await desktop.saveProject({ contents, name }); if (result.canceled) { toast('저장을 취소했습니다. 현재 실험은 유지합니다.'); return; } }
-    else browserDownload(contents, name);
+    else downloadBrowserProject(contents, name);
     saveLocal(); toast('실험 이력·비교 기준·관찰 시점을 저장했습니다.');
   } catch (error) { toast(`저장하지 못했습니다. ${error.message}`); } finally { setBusy(false); }
 }
@@ -264,6 +343,13 @@ try {
   if (initialCamera) scene.setCameraState(initialCamera);
 } catch (error) { $('#scene-error').hidden = false; text('#scene-error', `3D 화면을 시작하지 못했습니다. ${error.message}`); }
 syncControls(); refresh(); if (!initialCamera) scene?.resetCamera();
+if (!desktop) {
+  browserAutosave = createBrowserAutosave({
+    key: STORAGE_KEY, storage: () => localStorage, locks: getBrowserLocks(), expected: lastStoredRaw,
+    baseline: currentProjectText(), capture: currentProjectText, onStatus: reportAutosave,
+  });
+  if (!storageBlocked && !browserAutosave.canSave()) reportAutosave('unavailable');
+}
 for (const key of ['module', 'contact', 'power', 'fan']) $(`#${key}`).addEventListener('change', event => changeConfig({ [key === 'power' ? 'powerW' : key]: key === 'fan' ? event.target.checked : key === 'power' ? Number(event.target.value) : event.target.value }));
 $('#play').addEventListener('click', togglePlay); $('#step').addEventListener('click', () => step(60)); $('#step-large').addEventListener('click', () => step(300));
 $('#reset').addEventListener('click', () => { if (!busy) resetRun(snapshot.config); });
@@ -282,6 +368,7 @@ $('#pin-comparison').addEventListener('click', pinComparison); $('#clear-compari
 for (const button of $$('[data-chart-mode]')) button.addEventListener('click', () => { chartDisplay = button.dataset.chartMode; refresh(false); });
 $('#new-project').addEventListener('click', newExperiment);
 $('#undo-new').addEventListener('click', () => { if (!previous || busy) return; const saved = previous; previous = null; readProject(saved.project, saved.guide); $('#undo-new').hidden = true; toast('직전 실험과 안내를 복원했습니다.'); });
+$('#export-unsaved-project').addEventListener('click', exportUnsavedProject);
 $('#save-project').addEventListener('click', saveFile); $('#open-project').addEventListener('click', openFile);
 $('#project-file').addEventListener('change', async event => {
   const file = event.target.files?.[0]; if (!file || busy) return; setBusy(true);
@@ -296,8 +383,13 @@ function showHelp() {
 $('#help').addEventListener('click', showHelp);
 $('#close-help').addEventListener('click', () => $('#help-dialog').close());
 desktop?.onCommand(command => { if (busy) return; if (command === 'new-project') newExperiment(); else if (command === 'open-project') openFile(); else if (command === 'save-project') saveFile(); else if (command === 'toggle-play') togglePlay(); else if (command === 'focus') toggleFocus(); else if (command === 'help') showHelp(); });
-window.addEventListener('beforeunload', () => { syncTime(); saveLocal(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+if (desktop) window.addEventListener('beforeunload', () => { syncTime(); saveLocal(); });
+else window.addEventListener('pagehide', () => { if (running) pause(); else flushBrowserOnHide(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) return;
+  if (desktop || running) pause();
+  else flushBrowserOnHide();
+});
 $('#sample-details').addEventListener('toggle', renderSamples);
 new ResizeObserver(drawChart).observe($('#temperature-chart'));
 window.thermalLab = {
