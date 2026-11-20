@@ -2,8 +2,10 @@ import { artifactDirectory } from '../scripts/safe-files.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
+import { autosaveLockName } from '../src/browser-autosave.js';
 import { ThermalRun } from '../src/experiment.js';
 import { DEFAULT_CONFIG } from '../src/model.js';
 import { createProject, serializeProject } from '../src/project.js';
@@ -11,6 +13,7 @@ import { temperatureColor } from '../src/geometry.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = artifactDirectory(root, path.join(root, 'output/browser-integration'));
+const baseURL = 'http://127.0.0.1:5231/', storageKey = 'thermal-lab-project-v1';
 await fs.mkdir(output, { recursive: true });
 const server = await createServer({ root, server: { host: '127.0.0.1', port: 5231, strictPort: true, hmr: false } }); await server.listen();
 const hardware = process.env.THERMAL_BROWSER_HARDWARE === '1';
@@ -30,6 +33,14 @@ const advance = seconds => page.evaluate(seconds => window.thermalLab.step(secon
 const select = async (id, value) => { const input = page.locator(`#${id}`); await input.scrollIntoViewIfNeeded(); return input.selectOption(String(value)); };
 const choose = id => page.locator(`[data-lesson="${id}"]`).click();
 const paint = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+async function until(action, message) {
+  const deadline = performance.now() + 15_000;
+  do {
+    if (await action()) return;
+    await delay(25);
+  } while (performance.now() < deadline);
+  assert.fail(message);
+}
 const near = (a, b, tolerance = 1e-8) => assert.ok(Math.abs(a - b) <= tolerance, `${a} != ${b}`);
 function numericEqual(a, b) {
   if (typeof a === 'number' && typeof b === 'number') { near(a, b); return; }
@@ -45,35 +56,142 @@ async function parity() {
 }
 try {
   await page.goto('http://127.0.0.1:5231/'); await page.waitForFunction(() => window.thermalLab?.sceneDebug()?.ready);
-  await check('a stale tab cannot overwrite a newer saved comparison on unload', async () => {
-    const tabs = await browser.newContext({ viewport: { width: 1200, height: 900 } });
-    const key = 'thermal-lab-project-v1';
+  await check('two real browser tabs queue concurrently and cannot overwrite each other', async () => {
+    const tabs = await browser.newContext({ viewport: { width: 1200, height: 900 }, acceptDownloads: true });
     const open = async () => {
-      const tab = await tabs.newPage();
-      await tab.goto(page.url());
+      const tab = await tabs.newPage(); watch(tab);
+      await tab.goto(baseURL);
       await tab.waitForFunction(() => window.thermalLab?.getState());
       return tab;
     };
-    const flush = tab => tab.evaluate(() => { window.dispatchEvent(new Event('beforeunload')); });
-    const stored = tab => tab.evaluate(key => localStorage.getItem(key), key);
+    const lockName = autosaveLockName(storageKey);
+    const stored = tab => tab.evaluate(key => localStorage.getItem(key), storageKey);
+    const stepTab = (tab, large = false) => tab.locator(large ? '#step-large' : '#step').click();
+    const exitsWithWarning = tab => tab.evaluate(() => !window.dispatchEvent(new Event('beforeunload', { cancelable: true })));
+    let holder;
     try {
-      const writer = await open();
-      await flush(writer);
-      const stale = await open();
-      assert.equal(await stale.evaluate(() => window.thermalLab.getState().comparison), null);
-      await writer.locator('#pin-comparison').click();
-      await flush(writer);
-      const newer = await stored(writer);
-      assert.ok(JSON.parse(newer).comparison);
-      await flush(stale);
-      assert.equal(await stored(stale), newer);
-      assert.match(await stale.locator('#save-status').innerText(), /다른 (?:창|탭)/);
-      // This tab still owns its in-memory work and may export it separately.
-      assert.equal(await stale.evaluate(() => window.thermalLab.project().comparison), null);
-      assert.equal(await stale.locator('#save-project').isEnabled(), true);
-      await stale.reload();
-      await stale.waitForFunction(() => window.thermalLab?.getState().comparison);
-      assert.deepEqual(await stale.evaluate(() => window.thermalLab.getState().comparison), JSON.parse(newer).comparison);
+      holder = await open();
+      await stepTab(holder);
+      await holder.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.experiment.elapsedS === 60, storageKey);
+      const original = await stored(holder);
+      const first = await open(), second = await open();
+      for (const tab of [first, second]) assert.equal(await tab.evaluate(() => window.thermalLab.getState().experiment.elapsedS), 60);
+      // The native lock is already held while two different client IDs queue.
+      // This is a controlled concurrent overlap, not just sequential stale saves.
+      const holdAutosaveLock = () => holder.evaluate(name => new Promise((ready, fail) => {
+        navigator.locks.request(name, () => new Promise(resolve => {
+          window.releaseAutosaveTestLock = resolve;
+          ready();
+        })).catch(fail);
+      }), lockName);
+      await holdAutosaveLock();
+      const waitForPending = (count, reference = original) => until(async () => {
+        const observed = await holder.evaluate(async ({name, key}) => {
+          const { pending, held } = await navigator.locks.query();
+          return {
+            stored: localStorage.getItem(key), locked: held.some(lock => lock.name === name),
+            clients: new Set(pending.filter(lock => lock.name === name).map(lock => lock.clientId)).size,
+          };
+        }, { name: lockName, key: storageKey });
+        assert.equal(observed.stored, reference, 'must not write while another tab holds the lock');
+        return observed.locked && observed.clients === count;
+      }, `expected ${count} distinct pending clients behind the held lock`);
+      // Queue in a fixed order, while both writers still have the same baseline.
+      await stepTab(first);
+      await waitForPending(1);
+      await stepTab(first); // The coalesced pending request must see this value.
+      await stepTab(second, true);
+      await waitForPending(2);
+      assert.equal(await stored(holder), original);
+      assert.equal(await exitsWithWarning(second), true, 'a queued edit must not be silently discarded on exit');
+      await holder.evaluate(() => window.releaseAutosaveTestLock());
+      await first.waitForFunction(() => document.querySelector('#save-status').textContent === '이 기기에 자동 저장됨');
+      await second.waitForFunction(() => !document.querySelector('#autosave-recovery').hidden);
+      const winner = await stored(holder);
+      assert.equal(JSON.parse(winner).experiment.elapsedS, 180);
+      assert.match(await second.locator('#autosave-title').innerText(), /다른 탭/);
+      assert.equal(await exitsWithWarning(second), true, 'a conflicted edit remains unsaved');
+      await stepTab(second); // The recovery button must capture latest, not first-conflicted, edits.
+      const expectedFile = await second.evaluate(() => window.thermalLab.project());
+      const pending = second.waitForEvent('download');
+      await second.locator('#export-unsaved-project').click();
+      const savedFile = await pending;
+      assert.match(savedFile.suggestedFilename(), /-recovered\.json$/);
+      const target = path.join(output, 'autosave-conflicted-tab.json');
+      await savedFile.saveAs(target);
+      assert.deepEqual(JSON.parse(await fs.readFile(target, 'utf8')), expectedFile);
+      assert.equal(expectedFile.experiment.elapsedS, 420);
+      assert.equal(await stored(second), winner);
+      assert.equal(await exitsWithWarning(second), false, 'the exact current snapshot has been offered for download');
+      await second.reload();
+      await second.waitForFunction(() => window.thermalLab?.getState().experiment.elapsedS === 180);
+      assert.equal(await second.locator('#autosave-recovery').isHidden(), true);
+      // Hold the disk-writing lock through a real reload. The tab-local
+      // journal must retain the edit even though it cannot be on disk yet.
+      await holdAutosaveLock();
+      await stepTab(second);
+      await waitForPending(1, winner);
+      const journalProject = await second.evaluate(() => window.thermalLab.project());
+      await second.reload();
+      await second.waitForFunction(expected => window.thermalLab && JSON.stringify(window.thermalLab.project()) === expected,
+        JSON.stringify(journalProject));
+      assert.equal(await stored(second), winner);
+      await holder.evaluate(() => window.releaseAutosaveTestLock());
+      await until(async () => JSON.stringify(JSON.parse(await stored(second))) === JSON.stringify(journalProject),
+        'replayed tab draft must finish the ordinary locked save');
+      const latest = await stored(second);
+
+      // Model an interrupted prior navigation whose comparison baseline is
+      // now stale. A strict reload must keep the latest shared record active.
+      await second.evaluate(({ key, expected, contents }) => {
+        sessionStorage.setItem(`${key}:tab-draft`, JSON.stringify({ version: 1, expected, contents, interrupted: false }));
+      }, { key: storageKey, expected: original, contents: JSON.stringify(expectedFile) });
+      await second.reload();
+      await second.waitForFunction(() => window.thermalLab && !document.querySelector('#tab-draft-recovery').hidden);
+      assert.deepEqual(await second.evaluate(() => window.thermalLab.project()), journalProject);
+      assert.equal(await stored(second), latest);
+      assert.equal(await second.evaluate(key => JSON.parse(sessionStorage.getItem(`${key}:tab-draft`)).interrupted, storageKey), true);
+      const interrupted = second.waitForEvent('download');
+      await second.locator('#export-interrupted-draft').click();
+      const recovered = await interrupted;
+      const recoveryPath = path.join(output, 'interrupted-autosave.json');
+      await recovered.saveAs(recoveryPath);
+      assert.deepEqual(JSON.parse(await fs.readFile(recoveryPath, 'utf8')), expectedFile);
+      assert.equal(await stored(second), latest);
+      // Continuous model time is dirty even between the periodic save ticks.
+      await second.locator('#play').click();
+      assert.equal(await exitsWithWarning(second), true);
+      await second.locator('#play').click();
+      await until(async () => !(await exitsWithWarning(second)), 'latest paused experiment must finish saving');
+    } finally {
+      await holder?.evaluate(() => window.releaseAutosaveTestLock?.()).catch(() => {});
+      await tabs.close();
+    }
+  });
+
+  await check('a browser without Web Locks restores but never rewrites existing autosave and offers direct export', async () => {
+    const tabs = await browser.newContext({ viewport: { width: 1200, height: 900 }, acceptDownloads: true });
+    try {
+      const other = await tabs.newPage(); watch(other);
+      const saved = await page.evaluate(() => window.thermalLab.project());
+      const raw = JSON.stringify(saved); // Different formatting is still a valid on-disk project.
+      await other.addInitScript(({ key, raw }) => {
+        Object.defineProperty(navigator, 'locks', { value: undefined });
+        localStorage.setItem(key, raw);
+      }, { key: storageKey, raw });
+      await other.goto(baseURL);
+      await other.waitForFunction(() => window.thermalLab?.getState() && !document.querySelector('#autosave-recovery').hidden);
+      assert.match(await other.locator('#autosave-title').innerText(), /안전한 자동 저장/);
+      assert.equal(await other.evaluate(() => window.thermalLab.getState().experiment.elapsedS), saved.experiment.elapsedS);
+      await other.locator('#step').click();
+      await other.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+      assert.equal(await other.evaluate(key => localStorage.getItem(key), storageKey), raw);
+      const pending = other.waitForEvent('download');
+      await other.locator('#export-unsaved-project').click();
+      const filepath = path.join(output, 'autosave-no-lock.json');
+      await (await pending).saveAs(filepath);
+      assert.equal(JSON.parse(await fs.readFile(filepath, 'utf8')).experiment.elapsedS, saved.experiment.elapsedS + 60);
+      assert.equal(await other.evaluate(key => localStorage.getItem(key), storageKey), raw);
     } finally { await tabs.close(); }
   });
 
@@ -179,6 +297,10 @@ try {
     await other.locator('#step').click(); assert.equal(await other.evaluate(() => localStorage.getItem('thermal-lab-project-v1')), raw);
     await other.reload();
     await other.waitForFunction(() => window.thermalLab && !document.querySelector('#storage-recovery').hidden);
+    await until(() => other.evaluate(async name => {
+      const { pending, held } = await navigator.locks.query();
+      return [...pending, ...held].every(lock => lock.name !== name);
+    }, autosaveLockName(storageKey)), 'backup lock must settle after reload');
     const backups = await other.evaluate(() => Object.keys(localStorage)
       .filter(key => key.startsWith('thermal-lab-project-v1-original-')).map(key => localStorage.getItem(key)));
     assert.deepEqual(backups, [raw], 'reloading the same protected original must not consume another quota entry');
