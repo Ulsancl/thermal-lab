@@ -8,5 +8,6 @@ for (const [name, display] of Object.entries({
   'electron-builder': 'electron-builder', playwright: 'Playwright', '@electron/fuses': '@electron/fuses',
 })) {
   const { version } = lock.packages['node_modules/' + name];
-  assert.ok(notices.includes(display + ' ' + version), 'Update dependency notice for ' + name);
+  const mentioned = notices.split(display + ' ')[1]?.match(/^\d+(?:\.\d+){2}(?:[-+][\w.-]+)?/)?.[0];
+  assert.equal(mentioned, version, 'Update dependency notice for ' + name);
 }

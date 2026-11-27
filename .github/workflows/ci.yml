@@ -74,6 +74,8 @@ jobs:
           $env:THERMAL_LAB_TEST_BUILD = '1'
           $env:THERMAL_LAB_DATA_DIR = Join-Path $env:RUNNER_TEMP 'thermal-production-override'
           $taskLog = Join-Path $env:APPDATA 'Thermal Lab/desktop.log'
+          $taskTitle = [regex]::Match((Get-Content -Raw -LiteralPath 'dist/index.html'), '<title>([^<]+)</title>').Groups[1].Value
+          if (-not $taskTitle) { throw 'Missing production document title' }
           $taskStart = [Diagnostics.ProcessStartInfo]::new((Resolve-Path 'release/windows/win-unpacked/Thermal Lab.exe').Path)
           $taskStart.UseShellExecute = $false
           $task = [Diagnostics.Process]::Start($taskStart)
@@ -83,9 +85,9 @@ jobs:
               Start-Sleep -Milliseconds 300
               $task.Refresh()
               if ($task.HasExited) { throw "Production executable exited early ($($task.ExitCode))" }
-              $ready = (Test-Path -LiteralPath $taskLog) -and ($task.MainWindowTitle -eq 'Thermal Lab')
+              $ready = (Test-Path -LiteralPath $taskLog) -and ($task.MainWindowTitle -eq $taskTitle)
             } until ($ready -or [DateTime]::UtcNow -gt $deadline)
-            if (-not $ready) { throw 'Production window did not load' }
+            if (-not $ready) { throw "Production window did not load. Last title: $($task.MainWindowTitle)" }
             if (Test-Path -LiteralPath $env:THERMAL_LAB_DATA_DIR) { throw 'Production app accepted the test profile override' }
             if (-not $task.CloseMainWindow() -or -not $task.WaitForExit(15000) -or $task.ExitCode -ne 0) {
               throw 'Production executable did not exit cleanly'

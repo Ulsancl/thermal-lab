@@ -5,9 +5,9 @@ const root = normalizePath(fileURLToPath(new URL('./', import.meta.url))).replac
 const internal = ['.security-stage-*', 'output', 'release', 'dist', 'dist-desktop-test']
   .flatMap(name => [root + name, root + name + '/**']);
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   base: './',
-  define: { __THERMAL_TEST_BUILD__: 'true' },
+  define: { __THERMAL_TEST_BUILD__: JSON.stringify(command === 'serve') },
   server: {
     host: '127.0.0.1',
     port: 5220,
@@ -15,4 +15,4 @@ export default defineConfig({
     watch: { ignored: internal },
     fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', ...internal] },
   },
-});
+}));
