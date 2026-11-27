@@ -1,1 +1,111 @@
-.thermal-scene{position:relative;isolation:isolate;overflow:hidden;touch-action:none}.thermal-scene>canvas{display:block;width:100%;height:100%;touch-action:none}.thermal-overlay{position:absolute;inset:0;pointer-events:none;overflow:hidden}.thermal-label-lines{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}.thermal-label-lines path{fill:none;stroke-linecap:round}.thermal-leader-halo{stroke:#10212ae0;stroke-width:3.5}.thermal-leader{stroke:#d0e7eb;stroke-width:1.25}.thermal-label-lines circle{fill:#c7edf1;stroke:#142b36;stroke-width:1.5}.thermal-part-label{position:absolute;height:30px;border:1px solid #6c8b9b66;border-radius:5px;padding:6px 8px;background:#132a35ed;color:#dcebef;text-align:left;font:500 11px/1.35 "Segoe UI","Malgun Gothic",sans-serif;pointer-events:auto;box-shadow:0 2px 8px #0003;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}.thermal-part-label:hover,.thermal-part-label.is-selected{background:#254d5c;border-color:#76ced9;color:#efffff}.thermal-part-label:focus-visible{outline:2px solid #e5bc76;outline-offset:2px}.thermal-scene-note,.thermal-flow-readout{position:absolute;bottom:11px;background:#122a35ed;color:#c8e0e8;border:1px solid #52738566;border-radius:5px;padding:7px 9px;font:500 10px/1.5 "Segoe UI","Malgun Gothic",sans-serif}.thermal-scene-note{left:10px;max-width:49%}.thermal-flow-readout{right:10px;max-width:47%;color:#eed19f}.thermal-scene [hidden]{display:none!important}@media(max-width:620px){.thermal-part-label{font-size:10px;padding:6px}.thermal-scene-note{left:9px;right:9px;bottom:46px;max-width:none;text-align:center}.thermal-flow-readout{left:9px;right:9px;max-width:none;text-align:center}}
+.thermal-scene {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  touch-action: none;
+  container-type: inline-size;
+}
+
+.thermal-scene > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.thermal-scene > canvas:focus-visible {
+  outline: 2px solid #9bdeeb;
+  outline-offset: -2px;
+}
+
+.thermal-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.thermal-label-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.thermal-label-lines path { fill: none; stroke-linecap: round; }
+.thermal-leader-halo { stroke: #12222be5; stroke-width: 3; }
+.thermal-leader { stroke: #bdd5de; stroke-width: 1; }
+.thermal-label-lines circle { fill: #d6ebed; stroke: #253642; stroke-width: 1.5; }
+
+.thermal-part-label {
+  position: absolute;
+  height: 30px;
+  min-height: 30px;
+  border: 1px solid #7c9da17d;
+  border-radius: 5px;
+  padding: 5px 8px 5px 12px;
+  background: #172833f2;
+  color: #edf2f3;
+  text-align: left;
+  font: 550 11px/1.35 "Segoe UI", "Malgun Gothic", sans-serif;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+  box-shadow: inset 3px 0 var(--node-temperature, transparent), 0 2px 8px #0004;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.thermal-part-label:hover,
+.thermal-part-label.is-selected {
+  background: #273e4b;
+  border-color: #a9d0d7;
+  color: #fff;
+}
+
+.thermal-part-label:focus-visible {
+  outline: 2px solid #e8c58f;
+  outline-offset: 2px;
+}
+
+.thermal-scene-note,
+.thermal-flow-readout {
+  position: absolute;
+  bottom: 10px;
+  border: 1px solid #617f8c86;
+  border-radius: 5px;
+  background: #192d39f0;
+  color: #d4e4ea;
+  padding: 5px 8px;
+  font: 500 10px/1.5 "Segoe UI", "Malgun Gothic", sans-serif;
+}
+
+.thermal-scene-note { left: 10px; max-width: 49%; }
+.thermal-flow-readout { right: 10px; max-width: 47%; color: #f6d8aa; }
+.thermal-scene [hidden] { display: none !important; }
+
+.workbench:has(.thermal-scene) .temperature-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workbench:has(.thermal-scene) .temperature-legend > i {
+  order: 1;
+  flex: 0 1 110px;
+  outline: 1px solid #dbeaf749;
+}
+
+.workbench:has(.thermal-scene) .temperature-legend > span:last-child { order: 2; }
+.workbench:has(.thermal-scene):has(#temperature:not(:checked)) .temperature-legend { display: none; }
+
+@container (max-width: 530px) {
+  .thermal-part-label { font-size: 10px; padding-left: 9px; }
+  .thermal-scene-note,
+  .thermal-flow-readout { left: 9px; right: 9px; max-width: none; text-align: center; }
+  .thermal-scene-note:has(+ .thermal-flow-readout:not([hidden])) { bottom: 38px; }
+}
