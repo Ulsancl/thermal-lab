@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { atomicWriteProject, WINDOWS_RETRY_DELAYS_MS } from '../desktop/atomic-save.cjs';
+import { windowsPowerShell, windowsPowerShellEnv } from '../desktop/windows-save.cjs';
 
 const previous = '{"original":"보존할 실험"}', replacement = '{"replacement":"완료된 실험"}';
 const scratchRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'output', 'atomic-save-tests');
@@ -96,4 +98,56 @@ test('a failed flush closes and removes the incomplete sibling without touching 
   await assert.rejects(atomicWriteProject(value.target, replacement, { operations, validateTarget: value.validateTarget }), { code: 'EIO' });
   assert.equal(closed, true); assert.equal(renamed, false);
   await unchangedAndClean(value);
+});
+test('new project files are private and replacement preserves the Windows file DACL', async t => {
+  const { directory, target } = await fixture(t);
+  const privateTarget = path.join(directory, '새 실험.json');
+  const validateTarget = async filename => {
+    const info = await fs.lstat(filename).catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+      return null;
+    });
+    assert.ok(!info || info.isFile());
+  };
+  const runPowerShell = script => {
+    const command = Buffer.from(script, 'utf16le').toString('base64');
+    const result = spawnSync(windowsPowerShell(), ['-NoProfile', '-NonInteractive', '-EncodedCommand', command], {
+      encoding: 'utf8', env: windowsPowerShellEnv({ THERMAL_FIXTURE: target, THERMAL_NEW_FIXTURE: privateTarget }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  let before;
+  if (process.platform === 'win32') {
+    before = runPowerShell(`
+      $ErrorActionPreference = 'Stop'
+      $acl = [IO.File]::GetAccessControl($env:THERMAL_FIXTURE)
+      $acl.SetAccessRuleProtection($true, $false)
+      $user = [Security.Principal.WindowsIdentity]::GetCurrent().User
+      $acl.SetAccessRule([Security.AccessControl.FileSystemAccessRule]::new($user, 'FullControl', 'Allow'))
+      $system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+      $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($system, 'Read', 'Allow'))
+      [IO.File]::SetAccessControl($env:THERMAL_FIXTURE, $acl)
+      [IO.File]::GetAccessControl($env:THERMAL_FIXTURE).GetSecurityDescriptorSddlForm('Access')
+    `);
+    assert.match(before, /^D:P/);
+  }
+  await atomicWriteProject(privateTarget, replacement, { validateTarget });
+  await atomicWriteProject(target, replacement, { validateTarget });
+  assert.equal(await fs.readFile(privateTarget, 'utf8'), replacement);
+  assert.equal(await fs.readFile(target, 'utf8'), replacement);
+  assert.deepEqual((await fs.readdir(directory)).sort(), ['experiment.json', '새 실험.json']);
+  if (process.platform === 'win32') {
+    const after = runPowerShell("[IO.File]::GetAccessControl($env:THERMAL_FIXTURE).GetSecurityDescriptorSddlForm('Access')");
+    assert.equal(after, before);
+    const isPrivate = runPowerShell(`
+      $acl = [IO.File]::GetAccessControl($env:THERMAL_NEW_FIXTURE)
+      $rules = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
+      $user = [Security.Principal.WindowsIdentity]::GetCurrent().User
+      $rules.Count -eq 1 -and $rules[0].IdentityReference -eq $user
+    `);
+    assert.equal(isPrivate, 'True');
+  } else {
+    for (const filename of [privateTarget, target]) assert.equal((await fs.stat(filename)).mode & 0o077, 0);
+  }
 });
