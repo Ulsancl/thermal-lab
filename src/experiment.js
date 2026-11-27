@@ -1,13 +1,21 @@
-import { DEFAULT_CONFIG, assertConfig, normalizeConfig, parametersFor, steadyState, temperatureRates, advanceTemperatures } from './model.js';
+import { DEFAULT_CONFIG, FAN_SPEED_PCT, assertConfig, fanSpeedPercent, normalizeConfig, parametersFor, steadyState, temperatureRates, advanceTemperatures } from './model.js';
 
 export const MAX_TIME_S = 7200;
 export const MAX_EVENTS = 256;
 const clone = value => structuredClone(value);
 const finite = value => typeof value === 'number' && Number.isFinite(value);
-function record(value, keys, name) {
+const controlKeys = ['powerW', 'fan'];
+const optionalControlKeys = ['fanSpeedPct'];
+function record(value, keys, name, optional = []) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError(`${name}: expected an object`);
   const actual = Object.keys(value);
-  if (actual.length !== keys.length || actual.some(key => !keys.includes(key))) throw new TypeError(`${name}: missing or unknown field`);
+  if (keys.some(key => !actual.includes(key)) || actual.some(key => !keys.includes(key) && !optional.includes(key))) throw new TypeError(`${name}: missing or unknown field`);
+}
+function configAtEvent(config, { timeS, ...controls }) {
+  const next = { ...config, ...controls };
+  // Every event captures the full live controls. Missing speed means the legacy endpoint.
+  if (!Object.hasOwn(controls, 'fanSpeedPct')) delete next.fanSpeedPct;
+  return next;
 }
 export function createExperiment(config = DEFAULT_CONFIG) {
   return { config: normalizeConfig(config), elapsedS: 0, events: [] };
@@ -20,10 +28,10 @@ export function assertExperiment(experiment) {
   if (experiment.events.length > MAX_EVENTS) throw new RangeError('The experiment supports at most 256 control events');
   let previous = -1;
   for (const event of experiment.events) {
-    record(event, ['timeS', 'powerW', 'fan'], 'event');
+    record(event, ['timeS', ...controlKeys], 'event', optionalControlKeys);
     if (!finite(event.timeS)) throw new TypeError('Event time must be finite');
     if (event.timeS < 0 || event.timeS > experiment.elapsedS || event.timeS <= previous) throw new RangeError('Events must be strictly increasing within the elapsed model time');
-    assertConfig({ ...experiment.config, powerW: event.powerW, fan: event.fan }); previous = event.timeS;
+    assertConfig(configAtEvent(experiment.config, event)); previous = event.timeS;
   }
   return experiment;
 }
@@ -39,7 +47,7 @@ export class ThermalRun {
     this.#samples = [{ timeS: 0, ...this.#temperatures }]; this.#anchor();
     for (const event of this.#events) {
       this.#advanceTo(event.timeS); this.#commitSample(event.timeS, this.#temperatures);
-      this.#config = { ...this.#initial, powerW: event.powerW, fan: event.fan };
+      this.#config = configAtEvent(this.#initial, event);
       this.#parameters = parametersFor(this.#config); this.#anchor();
     }
     this.#advanceTo(experiment.elapsedS);
@@ -87,15 +95,21 @@ export class ThermalRun {
     return this.getSnapshot();
   }
   changeControl(patch) {
-    if (!patch || typeof patch !== 'object' || Array.isArray(patch) || ![Object.prototype, null].includes(Object.getPrototypeOf(patch)) || Object.keys(patch).some(key => !['powerW', 'fan'].includes(key))) throw new TypeError('Only powerW and fan controls can change during a run');
-    const next = { ...this.#config, ...patch }; assertConfig(next);
-    if (next.powerW === this.#config.powerW && next.fan === this.#config.fan) return this.getSnapshot();
+    record(patch, [], 'control change', [...controlKeys, ...optionalControlKeys]);
+    const next = { ...this.#config, ...patch };
+    if (Object.hasOwn(patch, 'fanSpeedPct')) {
+      if (!Object.hasOwn(patch, 'fan')) next.fan = patch.fanSpeedPct > FAN_SPEED_PCT.min;
+    } else if (Object.hasOwn(patch, 'fan')) delete next.fanSpeedPct;
+    assertConfig(next);
+    const speed = fanSpeedPercent(next);
+    if (next.powerW === this.#config.powerW && speed === fanSpeedPercent(this.#config)) return this.getSnapshot();
     const replacing = this.#events.at(-1)?.timeS === this.#timeS;
     if (!replacing && this.#events.length >= MAX_EVENTS) throw new RangeError('256 control events reached; save this experiment and start a new one');
     const event = { timeS: this.#timeS, powerW: next.powerW, fan: next.fan };
+    if (speed > FAN_SPEED_PCT.min && speed < FAN_SPEED_PCT.max) event.fanSpeedPct = speed;
     if (replacing) this.#events[this.#events.length - 1] = event; else this.#events.push(event);
     this.#commitSample(this.#timeS, this.#temperatures);
-    this.#config = next; this.#parameters = parametersFor(next); this.#anchor();
+    this.#config = configAtEvent(this.#initial, event); this.#parameters = parametersFor(this.#config); this.#anchor();
     return this.getSnapshot();
   }
 }

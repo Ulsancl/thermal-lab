@@ -1,5 +1,6 @@
 import './style.css';
-import { DEFAULT_CONFIG, normalizeConfig } from './model.js';
+import './conditions.css';
+import { AMBIENT_C, DEFAULT_CONFIG, FAN_SPEED_PCT, fanSpeedPercent, normalizeConfig } from './model.js';
 import { ThermalRun, createExperiment } from './experiment.js';
 import { createProject, parseProject, serializeProject, normalizeView, DEFAULT_VIEW } from './project.js';
 import { createBrowserAutosave, supportsAutosaveLock, withAutosaveLock, writeIfUnchanged, readTabDraft, writeTabDraft, clearTabDraft } from './browser-autosave.js';
@@ -16,7 +17,9 @@ const text = (selector, value) => { $(selector).textContent = value; };
 const copy = value => structuredClone(value), number = (value, digits = 1) => (Math.abs(value) < .5 * 10 ** -digits ? 0 : value).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const time = seconds => { const tenths = Math.round(seconds * 10); return `${String(Math.floor(tenths / 600)).padStart(2, '0')}:${((tenths % 600) / 10).toFixed(1).padStart(4, '0')}`; };
 const moduleName = value => value === 'fins' ? '핀' : '평판';
-const configName = config => `${moduleName(config.module)} · ${config.contact === 'good' ? '좋은' : '나쁜'} 접촉 · ${config.powerW} W${config.fan ? ' · 팬 켜짐' : ''}`;
+const conditionNumber = value => value > 0 && value < .01 ? value.toExponential(1) : value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
+const fanLabel = config => `${conditionNumber(fanSpeedPercent(config))}%`;
+const configName = config => `${moduleName(config.module)} · ${config.contact === 'good' ? '좋은' : '나쁜'} 접촉 · ${config.powerW} W · 주위 ${conditionNumber(config.ambientC ?? AMBIENT_C.default)} °C${config.module === 'fins' ? ` · 팬 ${fanLabel(config)}` : ''}`;
 const same = (a, b) => Object.keys(DEFAULT_CONFIG).every(key => a[key] === b[key]);
 const STORAGE_KEY = 'thermal-lab-project-v1', desktop = window.thermalDesktop;
 let run = new ThermalRun(), snapshot = run.getSnapshot(), view = normalizeView(DEFAULT_VIEW), comparison = null, playbackRate = 60;
@@ -212,7 +215,7 @@ function pause() {
 function togglePlay() {
   if (busy) return;
   if (running) { pause(); return; }
-  if (snapshot.atLimit) { toast('2시간 기록을 마쳤습니다. 25 °C에서 다시 시작하세요.'); return; }
+  if (snapshot.atLimit) { toast('2시간 기록을 마쳤습니다. 현재 주위 온도에서 다시 시작하세요.'); return; }
   running = true; armUnloadGuard(); lastTick = performance.now(); lastSave = lastTick; refresh(); frameId = requestAnimationFrame(frame);
 }
 function step(seconds) {
@@ -231,35 +234,50 @@ function readProject(project, restoredGuide = null) {
   try {
     run = nextRun; snapshot = run.getSnapshot(); ({ comparison, playbackRate } = saved);
     ({ view, camera: initialCamera } = saved.observation); guide = restoredGuide; animationTimeS = 0; chartDisplay = 'both';
-    syncControls(); refresh(); if (initialCamera) scene?.setCameraState(initialCamera); else scene?.resetCamera();
+    syncControls({ resetAmbient: true }); refresh(); if (initialCamera) scene?.setCameraState(initialCamera); else scene?.resetCamera();
   } finally { restoring = false; }
   saveLocal();
 }
 function resetRun(config, { defaults = false } = {}) {
   pause(); remember(); scene?.endInspection?.(); run = new ThermalRun(createExperiment(config)); snapshot = run.getSnapshot(); guide = null; animationTimeS = 0; chartDisplay = 'both';
   if (defaults) { comparison = null; view = normalizeView(DEFAULT_VIEW); playbackRate = 60; }
-  syncControls(); refresh(); if (defaults) scene?.resetCamera(); saveLocal();
-  toast('25 °C에서 새 실험을 시작했습니다. 직전 실험은 되돌릴 수 있습니다.');
+  syncControls({ resetAmbient: true }); refresh(); if (defaults) scene?.resetCamera(); saveLocal();
+  toast(`${conditionNumber(snapshot.parameters.ambientC)} °C에서 새 실험을 시작했습니다. 직전 실험은 되돌릴 수 있습니다.`);
 }
 function newExperiment() { if (!busy) resetRun(DEFAULT_CONFIG, { defaults: true }); }
 function changeConfig(patch) {
   if (busy) return;
-  syncTime(); const next = normalizeConfig({ ...snapshot.config, ...patch });
-  if (same(next, snapshot.config)) { syncControls(); return; }
-  const replacement = next.module !== snapshot.config.module || next.contact !== snapshot.config.contact;
+  syncTime();
+  const request = { ...snapshot.config, ...patch };
+  if (Object.hasOwn(patch, 'fan')) delete request.fanSpeedPct;
+  const next = normalizeConfig(request), speed = fanSpeedPercent(next);
+  const ambientChanged = (next.ambientC ?? AMBIENT_C.default) !== snapshot.parameters.ambientC;
+  if (same(next, snapshot.config) && !ambientChanged && speed === fanSpeedPercent(snapshot.config)) { syncControls({ resetAmbient: Object.hasOwn(patch, 'ambientC') }); return; }
+  const replacement = ambientChanged || next.module !== snapshot.config.module || next.contact !== snapshot.config.contact;
   const nextGuide = copy(guide); guideControlChange(nextGuide, next, snapshot);
   try {
     if (replacement) {
       pause(); remember(); scene?.endInspection?.(); guide = nextGuide; run = new ThermalRun(createExperiment(next)); snapshot = run.getSnapshot(); animationTimeS = 0;
-      toast('부품을 교체해 25 °C에서 다시 시작했습니다. 직전 실험은 되돌릴 수 있습니다.');
-    } else { snapshot = run.changeControl({ powerW: next.powerW, fan: next.fan }); guide = nextGuide; }
+      toast(`${conditionNumber(snapshot.parameters.ambientC)} °C에서 새 실험을 시작했습니다. 직전 실험은 되돌릴 수 있습니다.`);
+    } else { snapshot = run.changeControl({ powerW: next.powerW, fanSpeedPct: speed }); guide = nextGuide; }
   } catch (error) { toast(`조건을 바꾸지 못했습니다. ${error.message}`); }
-  syncControls(); refresh(); scheduleSave();
+  syncControls({ resetAmbient: replacement }); refresh(); scheduleSave();
 }
-function syncControls() {
-  const config = snapshot.config; $('#module').value = config.module; $('#contact').value = config.contact;
-  $('#power').value = String(config.powerW); $('#fan').checked = config.fan; $('#fan').disabled = config.module !== 'fins';
-  text('#fan-availability', config.module === 'fins' ? '핀 사이로 공기를 보냅니다' : '핀 모듈에서 사용');
+function showFanSpeed(value) {
+  const label = `${conditionNumber(value)}%`;
+  text('#fan-speed-value', label); $('#fan-speed').setAttribute('aria-valuetext', label);
+}
+function syncControls({ resetAmbient = false } = {}) {
+  const config = snapshot.config, ambientC = snapshot.parameters.ambientC, fanAvailable = config.module === 'fins';
+  $('#module').value = config.module; $('#contact').value = config.contact;
+  $('#power').value = String(config.powerW); $('#fan').checked = config.fan;
+  $('#fan').disabled = $('#fan-speed').disabled = !fanAvailable;
+  $('#fan-speed').value = String(fanSpeedPercent(config)); showFanSpeed(fanSpeedPercent(config));
+  text('#fan-availability', fanAvailable ? '핀 방열판과 공기 사이의 열전달을 조절합니다.' : '핀 방열판을 선택하면 팬을 조절할 수 있습니다.');
+  const ambientInput = $('#ambient-c');
+  if (resetAmbient || ambientInput.defaultValue !== String(ambientC)) ambientInput.defaultValue = ambientInput.value = String(ambientC);
+  text('#scene-ambient', `주위 공기 ${conditionNumber(ambientC)} °C`);
+  text('#reset', `${conditionNumber(ambientC)} °C에서 다시`);
   $('#playback-rate').value = String(playbackRate);
   for (const input of $$('[data-view]')) input.checked = view[input.dataset.view];
   $('#part-select').value = view.selectedPart;
@@ -269,7 +287,7 @@ function startLesson(id) {
   if (busy || !LESSONS[id]) return;
   pause(); remember(); scene?.endInspection?.(); guide = createGuide(id); run = new ThermalRun(createExperiment(LESSONS[id].config)); snapshot = run.getSnapshot();
   comparison = null; view = normalizeView(DEFAULT_VIEW); playbackRate = 60; animationTimeS = 0; chartDisplay = 'both';
-  syncControls(); refresh(); scene?.resetCamera(); saveLocal();
+  syncControls({ resetAmbient: true }); refresh(); scene?.resetCamera(); saveLocal();
 }
 function pinComparison() {
   syncTime(); comparison = { label: `${configName(snapshot.config)} · ${time(snapshot.timeS)}`, experiment: run.exportExperiment() }; chartDisplay = 'both';
@@ -317,18 +335,18 @@ function refresh(renderScene = true) {
   $('#play').setAttribute('aria-pressed', String(running)); $('#time-limit').hidden = !snapshot.atLimit;
   $('#step').disabled = snapshot.atLimit; $('#step-large').disabled = snapshot.atLimit;
   const p = snapshot.parameters;
-  text('#parameter-summary', `발열체 열용량 ${p.heaterCapacityJPerK} J/K · 방열판 ${p.sinkCapacityJPerK} J/K. 접촉저항 ${p.contactResistanceKPerW} K/W · 공기로의 방열 계수 ${p.airConductanceWPerK} W/K. 전력 ${snapshot.config.powerW} W.`);
+  text('#parameter-summary', `주위 ${conditionNumber(p.ambientC)} °C · 전력 ${snapshot.config.powerW} W. 발열체 열용량 ${p.heaterCapacityJPerK} J/K · 방열판 ${p.sinkCapacityJPerK} J/K. 접촉저항 ${p.contactResistanceKPerW} K/W · 공기로의 방열 계수 ${number(p.airConductanceWPerK, 3)} W/K.`);
   const part = COMPONENTS.find(item => item.id === view.selectedPart);
   if (part) { text('#part-name', part.name); text('#part-material', part.material); text('#part-description', part.description); }
   const fanPart = view.selectedPart.startsWith('fan-'), sinkPart = ['heat-sink', 'cartridge-handle'].includes(view.selectedPart), contactPart = view.selectedPart === 'contact-pad';
   $('#part-action').hidden = !(fanPart || sinkPart || contactPart);
   $('#part-action').disabled = fanPart && snapshot.config.module !== 'fins';
   text('#part-action', sinkPart ? `모듈을 ${snapshot.config.module === 'plate' ? '핀' : '평판'}으로 교체` : contactPart ? `접촉을 ${snapshot.config.contact === 'good' ? '나쁘게' : '좋게'} 변경` : snapshot.config.fan ? '팬 끄기' : '팬 켜기');
-  text('#part-state', fanPart ? (snapshot.config.module !== 'fins' ? '핀 모듈을 장착하면 팬을 켤 수 있습니다.' : snapshot.config.fan ? '팬 켜짐 · 회전은 작동 상태를 설명합니다.' : '팬 꺼짐') : contactPart ? `${snapshot.config.contact === 'good' ? '좋은' : '나쁜'} 접촉 · 온도 차이 ${number(snapshot.heaterC - snapshot.sinkC)} °C` : sinkPart ? `${moduleName(snapshot.config.module)} · 평균 ${number(snapshot.sinkC)} °C` : view.selectedPart === 'heater-block' ? `입력 ${snapshot.config.powerW} W · 평균 ${number(snapshot.heaterC)} °C` : '부품을 선택해도 실험 조건은 유지됩니다.');
+  text('#part-state', fanPart ? (snapshot.config.module !== 'fins' ? '핀 모듈을 장착하면 팬을 켤 수 있습니다.' : snapshot.config.fan ? `팬 운전 비율 ${fanLabel(snapshot.config)} · 회전은 대표 표시입니다.` : '팬 꺼짐') : contactPart ? `${snapshot.config.contact === 'good' ? '좋은' : '나쁜'} 접촉 · 온도 차이 ${number(snapshot.heaterC - snapshot.sinkC)} °C` : sinkPart ? `${moduleName(snapshot.config.module)} · 평균 ${number(snapshot.sinkC)} °C` : view.selectedPart === 'heater-block' ? `입력 ${snapshot.config.powerW} W · 평균 ${number(snapshot.heaterC)} °C` : '부품을 선택해도 실험 조건은 유지됩니다.');
   $('#comparison').hidden = !comparison; $('#comparison-key').hidden = !comparison; $('#comparison-display').hidden = !comparison;
   if (comparison) text('#comparison-summary', comparison.label);
   const events = run.exportExperiment().events;
-  text('#event-summary', events.length ? `조건 변경 ${events.length}회 · 최근 ${events.slice(-3).map(event => `${time(event.timeS)} / ${event.powerW} W / 팬 ${event.fan ? '켜짐' : '꺼짐'}`).join(' → ')}` : '아직 조건 변경이 없습니다. 전력·팬을 바꾸면 같은 온도 이력 위에 기록됩니다.');
+  text('#event-summary', events.length ? `조건 변경 ${events.length}회 · 최근 ${events.slice(-3).map(event => `${time(event.timeS)} / ${event.powerW} W / 팬 ${fanLabel(event)}`).join(' → ')}` : '전력이나 팬 비율을 바꾸면 이곳에 변경 시점이 기록됩니다.');
   drawChart();
   if (comparison && chart.debug?.savedEnd) { const saved = chart.debug.savedEnd; text('#comparison-endpoint', `보관 끝점 ${time(saved.timeS)}\n발열체 ${number(saved.heaterC)} °C · 방열판 ${number(saved.sinkC)} °C`); }
   for (const button of $$('[data-chart-mode]')) button.setAttribute('aria-pressed', String(button.dataset.chartMode === chartDisplay));
@@ -393,12 +411,15 @@ async function openFile() {
 function toggleFocus() { focused = !focused; document.body.classList.toggle('focus-mode', focused); text('#focus', focused ? '실험 화면으로' : '3D 크게 보기'); returnToScene(); }
 
 $('#part-select').replaceChildren(...COMPONENTS.map(part => Object.assign(document.createElement('option'), { value: part.id, textContent: part.name })));
+Object.assign($('#ambient-c'), { min: AMBIENT_C.min, max: AMBIENT_C.max });
+Object.assign($('#fan-speed'), { min: FAN_SPEED_PCT.min, max: FAN_SPEED_PCT.max });
+text('#ambient-hint', `${AMBIENT_C.min}–${AMBIENT_C.max} °C · 적용하면 이 온도에서 새 실험을 시작합니다.`);
 $('#temperature-gradient').style.background = `linear-gradient(90deg,${temperatureColor(25)},${temperatureColor(65)} 47%,${temperatureColor(110)})`;
 try {
   scene = new ThermalScene($('#scene'), { onSelect: selectPart, onCameraChange: scheduleSave });
   if (initialCamera) scene.setCameraState(initialCamera);
 } catch (error) { $('#scene-error').hidden = false; text('#scene-error', `3D 화면을 시작하지 못했습니다. ${error.message}`); }
-syncControls(); refresh(); if (!initialCamera) scene?.resetCamera();
+syncControls({ resetAmbient: true }); refresh(); if (!initialCamera) scene?.resetCamera();
 if (!desktop) {
   browserAutosave = createBrowserAutosave({
     key: STORAGE_KEY, storage: () => localStorage, locks: getBrowserLocks(), expected: lastStoredRaw,
@@ -408,6 +429,13 @@ if (!desktop) {
   else if (resumedTabDraft) saveLocal();
 }
 for (const key of ['module', 'contact', 'power', 'fan']) $(`#${key}`).addEventListener('change', event => changeConfig({ [key === 'power' ? 'powerW' : key]: key === 'fan' ? event.target.checked : key === 'power' ? Number(event.target.value) : event.target.value }));
+$('#ambient-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const input = $('#ambient-c');
+  if (input.reportValidity()) changeConfig({ ambientC: input.valueAsNumber });
+});
+$('#fan-speed').addEventListener('input', event => showFanSpeed(event.target.valueAsNumber));
+$('#fan-speed').addEventListener('change', event => changeConfig({ fanSpeedPct: event.target.valueAsNumber }));
 $('#play').addEventListener('click', togglePlay); $('#step').addEventListener('click', () => step(60)); $('#step-large').addEventListener('click', () => step(300));
 $('#reset').addEventListener('click', () => { if (!busy) resetRun(snapshot.config); });
 $('#playback-rate').addEventListener('change', event => { syncTime(); playbackRate = Number(event.target.value); refresh(); scheduleSave(); });

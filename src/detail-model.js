@@ -1,4 +1,4 @@
-import { assertConfig, parametersFor, steadyState } from './model.js';
+import { assertConfig, fanSpeedPercent, parametersFor, steadyState } from './model.js';
 import { MAX_TIME_S } from './experiment.js';
 
 const finite = value => typeof value === 'number' && Number.isFinite(value);
@@ -77,13 +77,13 @@ const modeNote = '두 시간척도는 각 감쇠 성분이 1/e로 줄어드는 �
 /** Each value belongs to an existing lumped node/path, never a new local sensor or material model. */
 export function describeThermalDetail(partId, snapshot, detail = thermalDetail(snapshot)) {
   const d = detail, { heater: h, sink: s } = d.nodes, { path: p, power: w, energy: e, modes: m } = d;
-  const fanState = snapshot.config.module === 'plate' ? '평판 · 팬 사용 안 함' : snapshot.config.fan ? '켜짐' : '꺼짐';
+  const fanCondition = snapshot.config.module === 'plate' ? fact('팬 상태', '평판 · 팬 사용 안 함') : fact('팬 운전 비율', fanSpeedPercent(snapshot.config), '%');
   const contactState = snapshot.config.contact === 'good' ? '좋음' : '나쁨';
   const moduleName = snapshot.config.module === 'plate' ? '평판' : '핀';
   const nodeFacts = (label, node) => [fact(`${label} 평균온도`, node.temperatureC, '°C'), fact(`${label} 정상온도`, node.steadyC, '°C'),
     fact(`${label} 변화율`, node.rateKPerS, 'K/s', 4), fact(`${label} 열용량`, node.capacityJPerK, 'J/K', 0),
     fact(`${label} 저장열`, node.storedEnergyJ, 'J'), fact(`${label} 저장 변화율`, node.storagePowerW, 'W')];
-  const fanFacts = () => [fact('팬 상태', fanState), fact('공기 열전달도', p.airConductanceWPerK, 'W/K'),
+  const fanFacts = () => [fanCondition, fact('공기 열전달도', p.airConductanceWPerK, 'W/K'),
     fact('공기 열저항', p.airResistanceKPerW, 'K/W'), fact('모듈−주변 온도차', p.airDeltaK, 'K'),
     fact('공기 전달 열률', w.airW, 'W'), fact('모듈 정상온도', s.steadyC, '°C')];
   const descriptors = {
@@ -94,7 +94,7 @@ export function describeThermalDetail(partId, snapshot, detail = thermalDetail(s
     'insulator': () => ({ facts: [fact('히터→받침 열경로', '모형에서 생략'), fact('주변온도', d.ambientC, '°C'),
       fact('블록 평균온도', h.temperatureC, '°C'), fact('블록 열용량', h.capacityJPerK, 'J/K', 0),
       fact('블록 저장열', e.heaterJ, 'J')], note: '받침 온도·열전도율·누설열은 계산하지 않습니다. 생략된 경로를 실제 단열 성능 0 W로 해석하지 마세요.' }),
-    'heater-block': () => ({ facts: nodeFacts('블록', h), note: `저장열은 주변 25 °C를 기준으로 한 블록 전체의 값입니다. 국소 표면 온도나 재료 시험값이 아닙니다. ${timeNote}` }),
+    'heater-block': () => ({ facts: nodeFacts('블록', h), note: `저장열의 기준은 주위 공기 ${d.ambientC} °C입니다. ${timeNote}` }),
     'heater-leads': () => ({ facts: [fact('히터 입력 열전력', w.inputW, 'W'), fact('누적 입력열', e.inputJ, 'J'),
       fact('블록 저장 변화율', w.heaterStorageW, 'W'), fact('접촉 전달 열률', w.contactW, 'W')],
     note: '선택한 전력은 히터 노드에 들어가는 열입니다. 전압·전류·배선 저항·배선 발열·팬 소비전력은 이 모형에 없습니다.' }),
@@ -106,12 +106,12 @@ export function describeThermalDetail(partId, snapshot, detail = thermalDetail(s
     'cartridge-handle': () => ({ facts: [fact('방열 모듈', moduleName), fact('모듈 열용량', s.capacityJPerK, 'J/K', 0),
       fact('모듈 평균온도', s.temperatureC, '°C'), fact('모듈 정상온도', s.steadyC, '°C'),
       fact('공기 열전달도', p.airConductanceWPerK, 'W/K'), fact('공기 전달 열률', w.airW, 'W')],
-    note: '값은 연결된 방열 모듈의 값입니다. 손잡이 온도·접촉 안전성은 계산하지 않습니다. 모듈 교체는 새 25 °C 실험을 시작합니다.' }),
+    note: `값은 연결된 방열 모듈의 값입니다. 모듈 교체 시 설정한 주위 온도 ${d.ambientC} °C에서 새 실험을 시작합니다.` }),
     'clamp-screws': () => ({ facts: [fact('접촉 상태', contactState), fact('접촉 열저항', p.contactResistanceKPerW, 'K/W'),
       fact('현재 접촉 온도차', p.contactDeltaK, 'K'), fact('정상 접촉 온도차', p.steadyContactDeltaK, 'K'),
       fact('접촉 전달 열률', w.contactW, 'W')], note: '조임 토크·압력·나사별 열전도는 계산하지 않습니다. 접촉 상태는 지정된 교육용 저항 계수이며 나사 형상으로 결정되지 않습니다.' }),
     'fan-frame': () => ({ facts: fanFacts(), note: '열전달도 W/K는 모듈 전체에서 공기로 전달되는 유효 계수입니다. 면적당 대류 계수 W/(m²·K)나 프레임 온도가 아닙니다.' }),
-    'fan-rotor': () => ({ facts: fanFacts(), note: '팬은 핀 모듈의 유효 열전달도만 바꿉니다. 회전 그림에서 RPM·풍속·유량·팬 동력을 추정할 수 없습니다. 켜고 끌 때 현재 온도와 저장열은 이어집니다.' }),
+    'fan-rotor': () => ({ facts: fanFacts(), note: '팬 비율은 핀 모듈의 유효 열전달도를 조절합니다. RPM·풍속·유량·팬 동력은 이 모형의 계산 범위 밖입니다. 비율을 바꾸면 현재 온도와 저장열은 이어집니다.' }),
     'fan-guard': () => ({ facts: fanFacts(), note: '보호망 자체의 온도·저항·압력 손실은 계산하지 않습니다. 공기 전달 열률의 양수는 모듈→주변 공기 방향입니다.' }),
     'probe-heater': () => ({ facts: [fact('블록 평균온도', h.temperatureC, '°C'), fact('현재 조건 정상온도', h.steadyC, '°C'),
       fact('정상−현재 온도차', h.errorToSteadyK, 'K'), fact('블록 변화율', h.rateKPerS, 'K/s', 4),

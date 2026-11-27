@@ -1,0 +1,50 @@
+.condition-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.condition-entry input {
+  width: 100%;
+  min-width: 0;
+  min-height: 35px;
+  border: 1px solid #526c76;
+  border-radius: 7px;
+  background: #1d3641;
+  padding: 6px 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.condition-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+#fan-speed-value {
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+
+.condition-fan {
+  margin-top: 8px;
+}
+
+.condition-fan input {
+  width: 100%;
+  min-height: 24px;
+  margin: 0;
+  accent-color: var(--gold);
+}
+
+.condition-fan input:disabled {
+  opacity: .55;
+}
+
+.condition-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}

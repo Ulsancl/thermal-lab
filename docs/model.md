@@ -4,17 +4,18 @@ Thermal Lab은 히터와 방열 모듈을 각각 하나의 평균 온도로 표�
 
 ## 계수와 단위
 
-모형 식별자는 `thermal-two-node-1`입니다. 주변 온도는 25 °C, 히터 열용량은 20 J/K로 고정합니다. 열용량은 온도 1 K를 올리는 데 필요한 에너지이며 온도 차이의 수치는 K와 °C에서 같습니다. 열과 온도·열용량의 기본 관계는 [OpenStax의 Heat Transfer, Specific Heat, and Calorimetry](https://openstax.org/books/university-physics-volume-2/pages/1-4-heat-transfer-specific-heat-and-calorimetry)를 참고할 수 있습니다.
+모형 식별자는 `thermal-two-node-1`입니다. 주변 온도는 실험별로 0–45 °C에서 정하며 기본값은 25 °C입니다. 히터 열용량은 20 J/K입니다. 열용량은 온도 1 K를 올리는 데 필요한 에너지이며 온도 차이의 수치는 K와 °C에서 같습니다. 열과 온도·열용량의 기본 관계는 [OpenStax의 Heat Transfer, Specific Heat, and Calorimetry](https://openstax.org/books/university-physics-volume-2/pages/1-4-heat-transfer-specific-heat-and-calorimetry)를 참고할 수 있습니다.
 
 | 조건 | 방열 모듈 열용량 Cs | 공기 쪽 유효 열전달 계수 Ga |
 | --- | --- | --- |
 | 평판 | 60 J/K | 0.20 W/K |
 | 핀, 팬 꺼짐 | 120 J/K | 0.50 W/K |
-| 핀, 팬 켜짐 | 120 J/K | 1.00 W/K |
+| 핀, 팬 50% | 120 J/K | 0.75 W/K |
+| 핀, 팬 100% | 120 J/K | 1.00 W/K |
 
 여기서 Ga는 방열 모듈 전체와 공기 사이의 **유효 열전달 conductance**입니다. 재료 자체의 열전도율 W/(m·K) 또는 면적당 대류 계수 W/(m²·K)가 아닙니다. 접촉 열저항 Rc는 좋은 접촉 0.50 K/W, 나쁜 접촉 2.00 K/W입니다. 입력 전력 P는 0, 4, 8, 12 W 중 하나입니다. 평판에서는 팬을 켤 수 없습니다.
 
-정확한 설정 키는 `{module,contact,fan,powerW}`입니다. `module`은 `plate|fins`, `contact`는 `good|poor`, `fan`은 boolean입니다. 기본 조건은 평판·좋은 접촉·팬 꺼짐·12 W입니다. 모듈·접촉 변경은 새 주변 온도 실험으로 시작합니다. 전력·팬 변경은 같은 실험의 온도를 유지합니다.
+필수 설정 키는 `{module,contact,fan,powerW}`입니다. `module`은 `plate|fins`, `contact`는 `good|poor`, `fan`은 boolean입니다. 선택 항목 `ambientC`는 °C, `fanSpeedPct`는 0–100%의 운전 비율입니다. 핀 모듈은 `Ga = 0.50 + 0.50 · fanSpeedPct / 100` W/K를 사용합니다. 기존 `fan: false`와 `fan: true`는 각각 0%와 100%를 뜻합니다. 기본 조건은 25 °C·평판·좋은 접촉·팬 꺼짐·12 W입니다. 주변 온도 적용이나 모듈·접촉 교체는 설정한 주변 온도에서 새 실험을 시작합니다. 전력·팬 변경은 같은 실험의 온도를 이어갑니다.
 
 ## 열 흐름과 온도 변화
 
@@ -27,7 +28,7 @@ Ch · dTh/dt = P − Qc
 Cs · dTs/dt = Qc − Qa
 ```
 
-Qc가 양수면 히터에서 방열 모듈로, Qa가 양수면 방열 모듈에서 공기로 열이 흐릅니다. 순수 계산 함수는 주변보다 차가운 초기값도 지원하므로 이 경우 Qa가 음수가 될 수 있습니다. 일반 앱 실험은 25 °C에서 시작하고 음의 전력을 사용하지 않습니다.
+Qc가 양수면 히터에서 방열 모듈로, Qa가 양수면 방열 모듈에서 공기로 열이 흐릅니다. 순수 계산 함수는 주변보다 차가운 초기값도 지원하므로 이 경우 Qa가 음수가 될 수 있습니다. 앱 실험은 설정한 주변 온도에서 시작하고 전력은 0 W 이상입니다.
 
 전도와 대류는 서로 다른 열 전달 과정입니다. 이 앱은 접촉 전도를 Rc 하나, 방열 모듈과 공기 사이 전달을 Ga 하나로 줄여 표현합니다. 과정의 구분은 [OpenStax의 Mechanisms of Heat Transfer](https://openstax.org/books/university-physics-volume-2/pages/1-6-mechanisms-of-heat-transfer)를 참고할 수 있습니다. 이 자료가 앱의 수치 계수나 실제 형상의 성능을 보증하는 것은 아닙니다.
 
@@ -37,7 +38,7 @@ Qc가 양수면 히터에서 방열 모듈로, Qa가 양수면 방열 모듈에�
 
 같은 조건을 충분히 오래 유지하면 `Ts = Ta + P/Ga`, `Th = Ts + P·Rc`에 접근합니다.
 
-| 12 W 조건 | 정상 히터 온도 | 정상 방열 모듈 온도 |
+| 주변 25 °C, 12 W 조건 | 정상 히터 온도 | 정상 방열 모듈 온도 |
 | --- | --- | --- |
 | 평판·좋은 접촉 | 91 °C | 85 °C |
 | 핀·좋은 접촉·팬 꺼짐 | 55 °C | 49 °C |
@@ -73,7 +74,7 @@ E방출 = E입력 − E저장
 
 ## 결정적 사건 기록과 표본
 
-실험은 `{config,elapsedS,events}`만 저장합니다. config는 최초 조건이며 현재 전력·팬 값은 마지막 사건에서 얻습니다. 사건은 `{timeS,powerW,fan}`이고 시간은 엄밀히 증가합니다. 0초 사건도 허용합니다. 온도·곡선·정상 온도·안내 진행은 저장하지 않고 최초 25 °C부터 동일한 입력으로 재생합니다.
+실험은 `{config,elapsedS,events}`만 저장합니다. config는 최초 조건이며 현재 전력·팬 값은 마지막 사건에서 얻습니다. 사건은 `{timeS,powerW,fan}`에 선택 항목 `fanSpeedPct`를 담을 수 있고 시간은 엄밀히 증가합니다. 0초 사건도 허용합니다. 온도·곡선·정상 온도·안내 진행은 최초 주변 온도와 같은 입력으로 재현합니다.
 
 표본은 정수 모델 초, 모든 사건 시각, 현재 소수 시각에 존재합니다. 정렬·중복 제거하며 지나간 프레임의 소수 시각은 계속 누적하지 않습니다. 조작 사건이 생긴 소수 시각은 유지합니다. 구간 시작 온도에서 각 표본을 직접 계산하므로 30/60/144/240 Hz나 불규칙한 화면 갱신이 같은 모델 시각의 곡선을 바꾸지 않습니다. 시간 누적에는 보상 합산을 사용하고, 이미 지난 구간의 전체 표본을 매 프레임 다시 계산하지 않습니다.
 
@@ -85,11 +86,11 @@ E방출 = E입력 − E저장
 
 ## 순수 API와 검증
 
-`model.js`는 `MODEL_VERSION`, `DEFAULT_CONFIG`, `normalizeConfig`, `assertConfig`, `parametersFor`, `steadyState`, `advanceTemperatures`, `temperatureRates`를 내보냅니다. `normalizeConfig`는 현재 조작값에만 기본값·최근접 허용 전력(동률이면 작은 값)을 적용합니다. `assertConfig`는 정확한 필드·형식·조합을 검사하고 원본을 변경하지 않습니다.
+`model.js`의 `normalizeConfig`는 현재 조작값에 기본값, 수치 조건의 허용 범위, 최근접 허용 전력(동률이면 작은 값)을 적용합니다. `assertConfig`는 원본을 유지하며 필드·형식·수치 범위·팬과 모듈의 조합을 검사합니다. `AMBIENT_C`와 `FAN_SPEED_PCT`는 허용 범위를, `fanSpeedPercent`는 현재 조건의 운전 비율을 제공합니다.
 
 `advanceTemperatures({heaterC,sinkC}, parameters, powerW, seconds)`는 새 온도 객체를 반환합니다. 일반 검증용 양의 열용량·열저항·열전달 계수와 주변보다 차갑거나 뜨거운 온도를 받을 수 있습니다. 모든 수는 유한해야 하고 시간·전력은 음수가 아니어야 합니다. 계산 중 감쇠율이나 결과가 수치 범위를 벗어나면 `RangeError`로 거부합니다. `temperatureRates`는 `{contactHeatW,airHeatW,heaterRateKPerS,sinkRateKPerS}`를 반환합니다.
 
-`experiment.js`는 `MAX_TIME_S`, `MAX_EVENTS`, `createExperiment`, `assertExperiment`, `ThermalRun`을 내보냅니다. `ThermalRun`의 `exportExperiment()`, `getSnapshot()`, `getSamples()`는 내부 상태와 분리된 객체를 반환합니다. `advance(seconds)`, `changeControl({powerW?,fan?})`는 새 snapshot을 반환합니다. module/contact 키는 진행 중 조작에 허용되지 않습니다.
+`experiment.js`는 `MAX_TIME_S`, `MAX_EVENTS`, `createExperiment`, `assertExperiment`, `ThermalRun`을 내보냅니다. `ThermalRun`의 `exportExperiment()`, `getSnapshot()`, `getSamples()`는 내부 상태와 분리된 객체를 반환합니다. `advance(seconds)`, `changeControl({powerW?,fan?,fanSpeedPct?})`는 새 snapshot을 반환합니다. `fan`만 전달하면 0% 또는 100%를 선택합니다. `module`, `contact`, `ambientC`를 바꾸려면 새 실험을 만듭니다.
 
 snapshot은 현재 config, timeS, 두 온도, 두 열 흐름, 두 온도 변화율, 저장·입력·방출 에너지, steady, parameters, atLimit를 제공합니다. renderer는 이 결과를 소비하며 모델식을 다시 만들지 않아도 됩니다. 순수 API는 DOM·Three.js·파일 시스템에 의존하지 않습니다.
 

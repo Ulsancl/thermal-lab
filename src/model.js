@@ -1,33 +1,52 @@
 // Two uniform thermal nodes; SI coefficients, absolute temperatures in Celsius.
 export const MODEL_VERSION = 'thermal-two-node-1';
 export const DEFAULT_CONFIG = Object.freeze({ module: 'plate', contact: 'good', fan: false, powerW: 12 });
+export const AMBIENT_C = Object.freeze({ min: 0, max: 45, default: 25 });
+export const FAN_SPEED_PCT = Object.freeze({ min: 0, max: 100 });
 const powers = [0, 4, 8, 12];
 const configKeys = ['module', 'contact', 'fan', 'powerW'];
+const conditionKeys = ['ambientC', 'fanSpeedPct'];
 const parameterKeys = ['ambientC', 'heaterCapacityJPerK', 'sinkCapacityJPerK', 'contactResistanceKPerW', 'airConductanceWPerK'];
 const finite = value => typeof value === 'number' && Number.isFinite(value);
-function shape(value, keys, name) {
+const clamp = (value, { min, max }) => Math.min(max, Math.max(min, value));
+function shape(value, keys, name, optional = []) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError(`${name}: expected an object`);
   const actual = Object.keys(value);
-  if (actual.length !== keys.length || actual.some(key => !keys.includes(key))) throw new TypeError(`${name}: missing or unknown field`);
+  if (keys.some(key => !actual.includes(key)) || actual.some(key => !keys.includes(key) && !optional.includes(key))) throw new TypeError(`${name}: missing or unknown field`);
 }
+export const fanSpeedPercent = config => config.fanSpeedPct ?? (config.fan ? FAN_SPEED_PCT.max : FAN_SPEED_PCT.min);
 export function normalizeConfig(input) {
   const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const module = value.module === 'fins' ? 'fins' : 'plate';
   const power = finite(value.powerW) ? Math.min(12, Math.max(0, value.powerW)) : 12;
-  return { module, contact: value.contact === 'poor' ? 'poor' : 'good', fan: module === 'fins' && value.fan === true,
+  const ambientC = finite(value.ambientC) ? clamp(value.ambientC, AMBIENT_C) : AMBIENT_C.default;
+  const requestedSpeed = finite(value.fanSpeedPct) ? clamp(value.fanSpeedPct, FAN_SPEED_PCT) : fanSpeedPercent({ fan: value.fan === true });
+  const speed = module === 'plate' ? FAN_SPEED_PCT.min : requestedSpeed;
+  const config = { module, contact: value.contact === 'poor' ? 'poor' : 'good', fan: speed > FAN_SPEED_PCT.min,
     powerW: powers.reduce((best, candidate) => Math.abs(candidate - power) < Math.abs(best - power) ? candidate : best) };
+  if (ambientC !== AMBIENT_C.default) config.ambientC = ambientC;
+  if (speed > FAN_SPEED_PCT.min && speed < FAN_SPEED_PCT.max) config.fanSpeedPct = speed;
+  return config;
+}
+function assertCondition(config, key, { min, max }) {
+  if (!Object.hasOwn(config, key)) return;
+  const value = config[key];
+  if (!finite(value)) throw new TypeError(`${key} must be finite`);
+  if (Object.is(value, -0) || value < min || value > max) throw new RangeError(`${key} must be within ${min}..${max}`);
 }
 export function assertConfig(config) {
-  shape(config, configKeys, 'config');
+  shape(config, configKeys, 'config', conditionKeys);
   if (!['plate', 'fins'].includes(config.module) || !['good', 'poor'].includes(config.contact) || typeof config.fan !== 'boolean' || !finite(config.powerW)) throw new TypeError('Invalid thermal configuration types');
+  assertCondition(config, 'ambientC', AMBIENT_C); assertCondition(config, 'fanSpeedPct', FAN_SPEED_PCT);
   if (!powers.includes(config.powerW) || (config.module === 'plate' && config.fan)) throw new RangeError('Unsupported heater power or fan/module combination');
+  if (config.fan !== (fanSpeedPercent(config) > FAN_SPEED_PCT.min)) throw new RangeError('Fan state and speed must agree');
   return config;
 }
 export function parametersFor(config) {
   assertConfig(config);
-  return { ambientC: 25, heaterCapacityJPerK: 20, sinkCapacityJPerK: config.module === 'plate' ? 60 : 120,
+  return { ambientC: config.ambientC ?? AMBIENT_C.default, heaterCapacityJPerK: 20, sinkCapacityJPerK: config.module === 'plate' ? 60 : 120,
     contactResistanceKPerW: config.contact === 'good' ? .5 : 2,
-    airConductanceWPerK: config.module === 'plate' ? .2 : config.fan ? 1 : .5 };
+    airConductanceWPerK: config.module === 'plate' ? .2 : .5 + .5 * fanSpeedPercent(config) / FAN_SPEED_PCT.max };
 }
 export function steadyState(config) {
   const p = parametersFor(config), sinkC = p.ambientC + config.powerW / p.airConductanceWPerK;

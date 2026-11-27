@@ -1,3 +1,5 @@
+import { AMBIENT_C, fanSpeedPercent } from './model.js';
+
 const copy = value => structuredClone(value);
 export const LESSONS = {
   storage: { title: '열은 어디에 남을까?', steps: 2, config: { module: 'plate', contact: 'good', fan: false, powerW: 12 } },
@@ -13,7 +15,9 @@ function expected(guide) {
   if (guide.id === 'cooling') return { module: guide.stage ? 'fins' : 'plate', contact: 'good', fan: guide.stage === 2, powerW: 12 };
   return { ...LESSONS.contact.config, contact: guide.stage ? 'poor' : 'good' };
 }
-const matches = (a, b) => Object.keys(b).every(key => a[key] === b[key]);
+const matches = (a, b) => Object.keys(b).every(key => a[key] === b[key])
+  && (a.ambientC ?? AMBIENT_C.default) === AMBIENT_C.default
+  && fanSpeedPercent(a) === fanSpeedPercent(b);
 /** Called only for an actual user control change, before replacing the run. */
 export function guideControlChange(guide, next, snapshot) {
   if (!guide || guide.status !== 'active') return;
@@ -30,7 +34,7 @@ export function guideControlChange(guide, next, snapshot) {
 export function lessonReady(guide, snapshot) {
   if (guide?.status !== 'active' || !matches(snapshot.config, expected(guide))) return false;
   if (guide.id === 'storage') return guide.stage === 0
-    ? snapshot.timeS >= 120 && snapshot.heaterC > snapshot.sinkC && snapshot.sinkC > 25
+    ? snapshot.timeS >= 120 && snapshot.heaterC > snapshot.sinkC && snapshot.sinkC > snapshot.parameters.ambientC
     : !!guide.powerOff && snapshot.timeS >= guide.powerOff.timeS + 120 && snapshot.storedEnergyJ < guide.powerOff.storedEnergyJ;
   return snapshot.timeS >= guide.stageStartedS + 1800
     && Math.abs(snapshot.heaterC - snapshot.steady.heaterC) <= 1
@@ -61,7 +65,7 @@ export function guideText(guide) {
   ][guide.stage] : guide.id === 'cooling' ? [
     '평판에 12 W를 공급해 1,800초 이상 관찰하세요. +300초를 여섯 번 누르면 30분입니다. 예상 정상온도와 1 °C 이내가 되면 확인합니다.',
     '방열 모듈을 핀 방열판으로 교체하세요. 25 °C에서 다시 1,800초 이상 가열하고 평판과 비교합니다. 팬은 꺼 둡니다.',
-    '냉각팬을 켜세요. 온도를 이어서 1,800초 이상 더 관찰합니다. 같은 전력인데 두 온도가 내려가는지 확인하세요.',
+    '냉각팬 작동을 켜서 100%로 맞추세요. 온도를 이어서 1,800초 이상 더 관찰합니다. 같은 전력인데 두 온도가 내려가는지 확인하세요.',
   ][guide.stage] : [
     '핀·팬·좋은 접촉에서 12 W로 1,800초 이상 관찰하세요. 발열체와 방열판의 온도 차이를 확인합니다.',
     '접촉면을 나쁜 접촉으로 교체하세요. 25 °C에서 1,800초 이상 다시 가열해, 특히 발열체 온도의 차이를 비교합니다.',
