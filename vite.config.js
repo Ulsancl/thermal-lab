@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig, normalizePath } from 'vite';
 
-const root = normalizePath(fileURLToPath(new URL('./', import.meta.url))).replace(/[[\]{}()*?!+]/g, '\\$&');
+const root = normalizePath(fileURLToPath(new URL('./', import.meta.url))).replace(/[\\^$.*+?()[\]{}|!]/g, '\\$&');
 const internal = ['.security-stage-*', 'output', 'release', 'dist', 'dist-desktop-test']
   .flatMap(name => [root + name, root + name + '/**']);
 
