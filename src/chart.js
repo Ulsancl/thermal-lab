@@ -22,6 +22,7 @@ const kelvins = value => `${(Math.abs(value) < .005 ? 0 : value).toFixed(2)} K`;
 export class TemperatureChart {
   constructor(canvas) {
     this.canvas = canvas; this.savedKey = ''; this.saved = []; this.debug = null;
+    this.fontFamily = getComputedStyle(canvas).fontFamily;
     this.metric = 'temperature';
     const panel = canvas.closest('.chart-panel');
     this.legends = panel.querySelectorAll('.heater-key, .sink-key');
@@ -93,7 +94,7 @@ export class TemperatureChart {
     const left = 43, right = width - 14, top = 15, bottom = height - 35;
     const end = Math.max(60, currentEnd?.timeS ?? 0, savedEnd?.timeS ?? 0);
     const x = t => left + (right - left) * t / end, y = value => bottom - (bottom - top) * (value - min) / (max - min);
-    ctx.font = '11px system-ui'; ctx.lineWidth = 1;
+    ctx.font = `11px ${this.fontFamily}`; ctx.lineWidth = 1;
     for (const value of scaleTicks) {
       ctx.strokeStyle = '#30434a'; ctx.beginPath(); ctx.moveTo(left, y(value)); ctx.lineTo(right, y(value)); ctx.stroke();
       ctx.fillStyle = '#9ab0b8'; ctx.textAlign = 'right'; ctx.fillText(String(value), left - 7, y(value) + 4);

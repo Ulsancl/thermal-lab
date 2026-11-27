@@ -308,13 +308,39 @@ try {
   });
   await check('desktop and narrow layouts expose live readings, controls and scene without horizontal overflow', async () => {
     await page.locator('#new-project').click(); if (await page.locator('#toast').isVisible()) await page.getByRole('button', { name: '알림 닫기' }).click();
-    for (const [width, height] of [[1600, 1000], [1280, 720], [390, 844]]) {
+    for (const [width, height] of [[1600, 1000], [1280, 720], [500, 844], [390, 844]]) {
       await page.setViewportSize({ width, height }); await page.locator('#reset-camera').click(); await paint(); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth) <= 1, `overflow at ${width}`);
       for (const id of ['module', 'contact', 'power', 'fan', 'play', 'step', 'save-project', 'help', 'part-select']) assert.equal(await page.locator(`#${id}`).isVisible(), true);
       await page.screenshot({ path: path.join(output, `thermal-${width}.png`), fullPage: true });
     }
     await select('module', 'fins'); await select('power', 8); const live = await page.locator('.compact-readings').boundingBox(); assert.ok(live.y >= 0 && live.y + live.height <= 844, 'live temperatures remain beside narrow controls');
     await select('part-select', 'heat-sink'); await page.locator('#focus-part').click(); await page.waitForFunction(() => { const box = document.querySelector('#scene').getBoundingClientRect(); return box.top >= -1 && box.bottom <= innerHeight + 1; });
+  });
+  await check('500px header actions and compact labels stay accessible by keyboard', async () => {
+    await page.setViewportSize({ width: 500, height: 844 });
+    await page.locator('#reset-camera').click();
+    await page.locator('#labels').setChecked(true);
+    const nav = page.getByRole('navigation', { name: '실험 파일과 도움말' });
+    const actions = ['새 실험', '실험 열기', '실험 저장', '도움말'].map(name => nav.getByRole('button', { name, exact: true }));
+    const boxes = await Promise.all(actions.map(button => button.boundingBox()));
+    assert.ok(boxes.every(box => box && box.y === boxes[0].y && box.height >= 44 && box.width >= 44));
+    await actions[0].focus();
+    for (const button of actions.slice(1)) {
+      await page.keyboard.press('Tab');
+      assert.equal(await button.evaluate(element => document.activeElement === element), true);
+    }
+    await page.keyboard.press('Enter');
+    assert.equal(await page.locator('#help-dialog').isVisible(), true);
+    await page.keyboard.press('Escape');
+    const labels = (await debug()).labels;
+    assert.deepEqual(new Set(labels.map(label => label.id)), new Set(['heater-block', 'heat-sink']));
+    assert.ok(labels.every(label => label.width <= 114 && label.height === 28));
+    const heater = page.getByRole('button', { name: /^발열 블록 .*°C$/ });
+    await heater.focus();
+    await advance(60);
+    assert.equal(await heater.evaluate(element => document.activeElement === element), true);
+    await page.keyboard.press('Enter');
+    assert.equal((await state()).view.selectedPart, 'heater-block');
   });
   assert.deepEqual(errors, []); assert.deepEqual(externalRequests, []);
 } catch (error) { failure = error; console.error(error.stack); await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {}); }

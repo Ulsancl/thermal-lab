@@ -13,13 +13,17 @@ const clean = value => Object.is(value, -0) ? 0 : value;
 const TAU = Math.PI * 2;
 const PART_TEMPERATURE = { 'heater-block': 'heaterC', 'heat-sink': 'sinkC', 'probe-heater': 'heaterC', 'probe-sink': 'sinkC' };
 const PROBE_LABEL = { 'probe-heater': '블록 프로브', 'probe-sink': '모듈 프로브' };
-const BENCH_BACKDROP = '#5e748b';
+const BENCH_BACKDROP = '#384b5e';
+const BENCH_FEET_X = [-.193, .193];
+const BENCH_FEET_Z = [-.113, .113];
+const COMPACT_OVERLAY_WIDTH = 530;
 
 export class ThermalScene {
   constructor(container, { onSelect = () => {}, onCameraChange = () => {} } = {}) {
     this.container = container; this.onSelect = onSelect; this.onCameraChange = onCameraChange;
     this.components = new Map(); this.geometries = new Set(); this.materials = new Set(); this.textures = new Set();
     this.view = structuredClone(DEFAULT_VIEW); this.updating = true; this.thermalMeshes = { heater: [], sink: [] };
+    this.fontFamily = getComputedStyle(container).fontFamily;
     container.classList.add('thermal-scene');
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.7)); this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -27,6 +31,8 @@ export class ThermalScene {
     this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.setAttribute('aria-label', '발열 블록과 방열 모듈의 두 평균온도를 관찰하는 3D 실험대'); this.renderer.domElement.tabIndex = 0; container.append(this.renderer.domElement);
     this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(BENCH_BACKDROP);
+    this.stageFog = new THREE.Fog(BENCH_BACKDROP, .82, 2.6);
+    this.scene.fog = this.stageFog;
     this.camera = new THREE.PerspectiveCamera(35, 1, .001, 30);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement); this.controls.enableDamping = false;
     this.controls.minDistance = .05; this.controls.maxDistance = 10; this.controls.maxPolarAngle = Math.PI;
@@ -42,7 +48,7 @@ export class ThermalScene {
     const rim = new THREE.DirectionalLight('#cadfff', 2.35); rim.position.set(.5, .5, -.7); this.scene.add(rim);
     this.root = new THREE.Group(); this.scene.add(this.root);
     this.heaterRoot = new THREE.Group(); this.padRoot = new THREE.Group(); this.sinkRoot = new THREE.Group(); this.clampsRoot = new THREE.Group(); this.root.add(this.heaterRoot, this.padRoot, this.sinkRoot, this.clampsRoot);
-    this.makeMaterials(); this.buildBench(); this.buildStack(); this.buildFan(); this.buildPower(); this.buildConnections(); this.buildFlows(); this.buildOverlay();
+    this.makeMaterials(); this.buildStage(); this.buildBench(); this.buildStack(); this.buildFan(); this.buildPower(); this.buildConnections(); this.buildFlows(); this.buildOverlay();
     this.root.traverse(object => { if (!object.isMesh) return; let ancestor = object; while (ancestor && !ancestor.userData.partId) ancestor = ancestor.parent; if (ancestor) object.userData.partId = ancestor.userData.partId; });
     this.pointer = new THREE.Vector2(); this.raycaster = new THREE.Raycaster();
     this.pointerDown = event => { this.down = [event.clientX, event.clientY]; };
@@ -104,18 +110,64 @@ export class ThermalScene {
     const context = canvas.getContext('2d');
     context.fillStyle = '#212a32'; context.fillRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = '#dce2de'; context.textAlign = 'center'; context.textBaseline = 'middle';
-    context.font = `600 ${Math.round(canvas.height * .51)}px "Malgun Gothic", sans-serif`;
+    context.font = `600 ${Math.round(canvas.height * .51)}px ${this.fontFamily}`;
     context.fillText(text, canvas.width / 2, canvas.height / 2, canvas.width - 26);
     const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace; this.textures.add(texture);
     const mesh = this.mesh(new THREE.PlaneGeometry(...size), this.material({ map: texture, metalness: .05, roughness: .7 }), parent, position);
     mesh.rotation.set(...rotation); mesh.userData.nonPickable = true; mesh.castShadow = false; return mesh;
+  }
+  buildStage() {
+    const floor = document.createElement('canvas');
+    floor.width = floor.height = 256;
+    const ctx = floor.getContext('2d');
+    const light = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+    light.addColorStop(0, '#435569');
+    light.addColorStop(.45, '#334457');
+    light.addColorStop(1, '#263746');
+    ctx.fillStyle = light;
+    ctx.fillRect(0, 0, 256, 256);
+    const map = new THREE.CanvasTexture(floor);
+    map.colorSpace = THREE.SRGBColorSpace;
+    // Sample the gradient around the bench and hold its edge color across the rest of the floor.
+    map.repeat.set(40 / 2, 30 / 2);
+    map.offset.set((1 - map.repeat.x) / 2, (1 - map.repeat.y) / 2);
+    this.textures.add(map);
+    this.ground = this.mesh(new THREE.PlaneGeometry(40, 30), this.material({ map, roughness: .92, metalness: .07 }), this.scene, [0, -.001, 0]);
+    this.ground.rotation.x = -Math.PI / 2;
+    this.ground.castShadow = false;
+
+    // The projected key shadow stays in place. This soft layer anchors the
+    // platform and feet at floor level even when the camera looks along the stage.
+    const shadow = document.createElement('canvas');
+    shadow.width = shadow.height = 256;
+    const shade = shadow.getContext('2d'), width = .59, depth = .42;
+    const ambient = shade.createRadialGradient(128, 128, 54, 128, 128, 128);
+    ambient.addColorStop(0, '#0006');
+    ambient.addColorStop(1, '#0000');
+    shade.fillStyle = ambient;
+    shade.fillRect(0, 0, 256, 256);
+    for (const x of BENCH_FEET_X) for (const z of BENCH_FEET_Z) {
+      const px = 128 + x * 256 / width, py = 128 + z * 256 / depth;
+      const contact = shade.createRadialGradient(px, py, 3, px, py, 22);
+      contact.addColorStop(0, '#000b');
+      contact.addColorStop(1, '#0000');
+      shade.fillStyle = contact;
+      shade.fillRect(px - 22, py - 22, 44, 44);
+    }
+    const shadowMap = new THREE.CanvasTexture(shadow);
+    this.textures.add(shadowMap);
+    const material = new THREE.MeshBasicMaterial({ map: shadowMap, transparent: true, depthWrite: false, toneMapped: false });
+    this.materials.add(material);
+    this.contactShadow = this.mesh(new THREE.PlaneGeometry(width, depth), material, this.scene, [0, -.00085, 0]);
+    this.contactShadow.rotation.x = -Math.PI / 2;
+    this.contactShadow.castShadow = this.contactShadow.receiveShadow = false;
   }
   buildBench() {
     const node = this.part('bench-base', [-.01, .025, .117]), m = this.mat;
     this.box([G.bench.size[0], .016, G.bench.size[2]], m.base, node, [0, .014, 0], .003);
     this.box([.434, .0035, .274], m.black, node, [0, .021, 0], .0015);
     this.mesh(machiningUVs(new RoundedBoxGeometry(.430, .002, .270, 2, .00065)), m.deck, node, [0, .023, 0]);
-    for (const x of [-.193, .193]) for (const z of [-.113, .113]) {
+    for (const x of BENCH_FEET_X) for (const z of BENCH_FEET_Z) {
       this.cylinder(.014, .007, m.rubber, node, [x, .0025, z]);
       this.cylinder(.011, .0016, m.steel, node, [x, .0056, z]);
       this.bolt(node, [x, .0244, z]);
@@ -128,7 +180,6 @@ export class ThermalScene {
     this.box(G.insulator.size, m.ceramic, support, G.insulator.center, .0011);
     this.box([.068, .0014, .068], m.dark, support, [-.07, .0247, 0], .0005);
     for (const [x, , z] of clampPositions()) this.cylinder(.004, .006, m.steel, node, [x, .027, z]);
-    const ground = this.mesh(new THREE.PlaneGeometry(40, 30), this.material({ color: '#283848', roughness: .92, metalness: .07 }), this.scene, [0, -.001, 0]); ground.rotation.x = -Math.PI / 2; ground.castShadow = false; this.ground = ground;
   }
   sinkBase(parent) {
     return this.mesh(machiningUVs(boredBlockGeometry('sink')), this.mat.aluminum, parent, G.sink.center, 'sink');
@@ -282,9 +333,9 @@ export class ThermalScene {
     const c = this.displayContext;
     c.fillStyle = '#101d23'; c.fillRect(0, 0, 768, 320);
     c.fillStyle = '#263840'; c.fillRect(0, 0, 768, 95); c.fillRect(382, 117, 3, 165);
-    c.textAlign = 'left'; c.fillStyle = '#bdcdd1'; c.font = '38px "Malgun Gothic", sans-serif'; c.fillText('입력 전력', 28, 62);
+    c.textAlign = 'left'; c.fillStyle = '#bdcdd1'; c.font = `38px ${this.fontFamily}`; c.fillText('입력 전력', 28, 62);
     c.font = '600 51px monospace'; c.fillStyle = '#f0e4cb'; c.textAlign = 'right'; c.fillText(`${snapshot.config.powerW} W`, 737, 65); c.textAlign = 'left';
-    c.font = '39px "Malgun Gothic", sans-serif'; c.fillStyle = '#c3cfd0'; c.fillText('발열 블록', 27, 172); c.fillText('방열 모듈', 410, 172);
+    c.font = `39px ${this.fontFamily}`; c.fillStyle = '#c3cfd0'; c.fillText('발열 블록', 27, 172); c.fillText('방열 모듈', 410, 172);
     c.font = '600 66px monospace'; c.fillStyle = '#f6ae7e'; c.fillText(`${snapshot.heaterC.toFixed(1)}°C`, 25, 262, 330);
     c.fillStyle = '#a5e1e8'; c.fillText(`${snapshot.sinkC.toFixed(1)}°C`, 407, 262, 330);
     this.displayTexture.needsUpdate = true;
@@ -351,15 +402,19 @@ export class ThermalScene {
   }
   layoutLabels() {
     if (!this.width) return; this.root.updateMatrixWorld(true);
-    for (const [id, label] of this.labels) { label.button.hidden = true; label.line.style.display = 'none'; label.button.classList.toggle('is-selected', id === this.view.selectedPart); }
-    if (!this.view.labels || this.height < 180) return;
+    const compact = this.width <= COMPACT_OVERLAY_WIDTH;
     const sectionKind = ['heater', 'sink'].includes(this.inspection?.kind) ? this.inspection.kind : null;
     const labelIds = this.inspection?.id === 'cartridge-handle' ? ['cartridge-handle', 'probe-sink'] : sectionKind ? [sectionKind === 'heater' ? 'heater-block' : 'heat-sink', `probe-${sectionKind}`] : [this.view.selectedPart, ...(this.focusContext || ['heater-block', 'heat-sink', 'fan-frame', 'power-unit'])];
-    const ids = [...new Set(labelIds)].slice(0, this.width < 480 ? 3 : 5), points = [];
+    const ids = this.view.labels && this.height >= 180 ? [...new Set(labelIds)] : [];
+    const points = [];
     for (const id of ids) { const part = this.components.get(id); if (!part || !this.actuallyVisible(part.node)) continue; const anchor = part.anchor.clone();
       if (sectionKind && id !== 'cartridge-handle') { const b = probeBoreSpec(sectionKind); anchor.set(b.center[0] + (id.startsWith('probe-') ? 0 : -.006), b.center[1], id.startsWith('probe-') ? b.frontZ + .008 : b.bottomZ - .004); }
-      const p = part.node.localToWorld(anchor).project(this.camera); if (Math.abs(p.x) > 1 || Math.abs(p.y) > 1 || p.z < -1 || p.z > 1) continue; points.push({ id, x: (p.x + 1) * this.width / 2, y: (1 - p.y) * this.height / 2 }); }
-    const width = this.width < 620 ? Math.min(126, this.width * .35) : 148, height = 30, placed = [];
+      const p = part.node.localToWorld(anchor).project(this.camera); if (Math.abs(p.x) > 1 || Math.abs(p.y) > 1 || p.z < -1 || p.z > 1) continue;
+      points.push({ id, x: (p.x + 1) * this.width / 2, y: (1 - p.y) * this.height / 2 });
+      if (points.length === (compact ? 2 : 5)) break;
+    }
+    const width = compact ? Math.min(114, this.width * .39) : this.width < 620 ? 126 : 148;
+    const height = compact ? 28 : 30, placed = [], shown = new Set();
     const sideLanes = !this.inspection && !this.focusContext && this.width >= 740 && points.length >= 3;
     const leftLane = sideLanes ? Math.max(9, Math.min(...points.map(p => p.x)) - width - 106) : 0;
     const rightLane = sideLanes ? Math.min(this.width - width - 9, Math.max(...points.map(p => p.x)) + 106) : 0;
@@ -379,11 +434,18 @@ export class ThermalScene {
       candidates.sort((a, b) => a.score - b.score); if (!candidates.length) continue; const { box, end } = candidates[0], label = this.labels.get(p.id); placed.push(box);
       const reading = this.snapshot?.[PART_TEMPERATURE[p.id]];
       const fullName = this.components.get(p.id).name;
-      const displayName = this.width < 530 ? PROBE_LABEL[p.id] ?? fullName : fullName;
+      const displayName = compact ? PROBE_LABEL[p.id] ?? fullName : fullName;
       const value = Number.isFinite(reading) ? ` ${reading.toFixed(1)} °C` : '';
       label.button.style.setProperty('--node-temperature', Number.isFinite(reading) && this.view.temperature ? temperatureColor(reading) : 'transparent');
       label.button.textContent = displayName + value; label.button.title = fullName + value; label.button.setAttribute('aria-label', fullName + value);
-      label.button.hidden = false; Object.assign(label.button.style, { left: `${box.x}px`, top: `${box.y}px`, width: `${width}px` }); const d = `M ${p.x} ${p.y} L ${end.x} ${end.y}`; label.halo.setAttribute('d', d); label.path.setAttribute('d', d); label.dot.setAttribute('cx', p.x); label.dot.setAttribute('cy', p.y); label.line.style.display = '';
+      shown.add(p.id);
+      Object.assign(label.button.style, { left: `${box.x}px`, top: `${box.y}px`, width: `${width}px`, height: `${height}px` }); const d = `M ${p.x} ${p.y} L ${end.x} ${end.y}`; label.halo.setAttribute('d', d); label.path.setAttribute('d', d); label.dot.setAttribute('cx', p.x); label.dot.setAttribute('cy', p.y);
+    }
+    for (const [id, label] of this.labels) {
+      const visible = shown.has(id);
+      if (label.button.hidden === visible) label.button.hidden = !visible;
+      label.line.style.display = visible ? '' : 'none';
+      label.button.classList.toggle('is-selected', id === this.view.selectedPart);
     }
   }
   visiblePoints(node) {
@@ -447,7 +509,9 @@ export class ThermalScene {
     for (const kind of ['heater', 'sink']) this.components.get(`probe-${kind}`).node.position.z = active?.kind === kind ? D.probeInspectionWithdrawalM : 0;
     this.plateGroup.visible = active?.kind !== 'sink' && this.snapshot?.config.module === 'plate';
     this.finsGroup.visible = active?.kind !== 'sink' && this.snapshot?.config.module === 'fins';
-    this.ground.visible = !active; this.flows.visible = !active && this.view.flows;
+    this.ground.visible = this.contactShadow.visible = !active;
+    this.scene.fog = active ? null : this.stageFog;
+    this.flows.visible = !active && this.view.flows;
     this.scene.background.set(active ? '#17252f' : BENCH_BACKDROP);
     if (this.flowReadout) this.flowReadout.hidden = !!active || !this.view.flows;
   }
