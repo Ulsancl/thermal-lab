@@ -74,7 +74,9 @@ jobs:
           $env:THERMAL_LAB_TEST_BUILD = '1'
           $env:THERMAL_LAB_DATA_DIR = Join-Path $env:RUNNER_TEMP 'thermal-production-override'
           $taskLog = Join-Path $env:APPDATA 'Thermal Lab/desktop.log'
-          $task = Start-Process -FilePath (Resolve-Path 'release/windows/win-unpacked/Thermal Lab.exe') -WindowStyle Hidden -PassThru
+          $taskStart = [Diagnostics.ProcessStartInfo]::new((Resolve-Path 'release/windows/win-unpacked/Thermal Lab.exe').Path)
+          $taskStart.UseShellExecute = $false
+          $task = [Diagnostics.Process]::Start($taskStart)
           try {
             $deadline = [DateTime]::UtcNow.AddSeconds(75)
             do {

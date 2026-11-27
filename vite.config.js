@@ -1,6 +1,9 @@
-import { defineConfig } from 'vite';
+import { fileURLToPath } from 'node:url';
+import { defineConfig, normalizePath } from 'vite';
 
-const internal = ['**/.security-stage-*', '**/.security-stage-*/**', '**/output/**', '**/release/**', '**/dist/**', '**/dist-desktop-test/**'];
+const root = normalizePath(fileURLToPath(new URL('./', import.meta.url))).replace(/[[\]{}()*?!+]/g, '\\$&');
+const internal = ['.security-stage-*', 'output', 'release', 'dist', 'dist-desktop-test']
+  .flatMap(name => [root + name, root + name + '/**']);
 
 export default defineConfig({
   base: './',
