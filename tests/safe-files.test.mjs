@@ -30,4 +30,7 @@ test('artifacts replace regular files atomically and directory publication keeps
   fs.mkdirSync(destination); fs.writeFileSync(path.join(destination, 'app'), 'old');
   publishDirectory(root, source, destination);
   assert.equal(readInput(root, path.join(destination, 'app')).toString(), 'new');
+  fs.mkdirSync(source);
+  assert.throws(() => publishDirectory(root, source, target), /real directory/);
+  assert.equal(readInput(root, target).toString(), 'second');
 });

@@ -81,7 +81,9 @@ export function copyInput(root, source, target) {
 
 export function publishDirectory(root, source, target) {
   secureDirectory(root, path.dirname(target));
-  if (fs.lstatSync(target, { throwIfNoEntry: false })) {
+  const existing = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (existing) {
+    if (!existing.isDirectory()) throw new Error('Directory output must replace a real directory');
     checkTree(root, target);
     // Keep the previous generated result until the new one is published.
     const backup = path.join(path.dirname(source), 'previous');

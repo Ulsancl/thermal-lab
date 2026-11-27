@@ -27,12 +27,7 @@ export class TemperatureChart {
     const panel = canvas.closest('.chart-panel');
     this.legends = panel.querySelectorAll('.heater-key, .sink-key');
     panel.querySelector('#comparison-key').textContent = '● 실선 현재 · ◇ 점선 보관';
-    const metricGroup = document.createElement('div');
-    metricGroup.className = 'chart-modes chart-metric';
-    metricGroup.setAttribute('role', 'group');
-    metricGroup.setAttribute('aria-label', '그래프 측정값');
-    metricGroup.innerHTML = `<button type="button" data-plot-metric="temperature" aria-pressed="true" aria-controls="temperature-chart">평균온도 (°C)</button>
-      <button type="button" data-plot-metric="difference" aria-pressed="false" aria-controls="temperature-chart">구간 온도차 (K)</button>`;
+    const metricGroup = panel.querySelector('.chart-metric');
     const metricButtons = [...metricGroup.querySelectorAll('button')];
     metricButtons.forEach(button => button.addEventListener('click', () => {
       this.metric = button.dataset.plotMetric;
@@ -40,15 +35,8 @@ export class TemperatureChart {
       this.updateMetricLabels();
       if (this.lastPlot) this.draw(...this.lastPlot);
     }));
-    this.endpoints = document.createElement('dl');
-    this.endpoints.id = 'temperature-chart-path-values';
-    this.endpoints.className = 'chart-gradient-values';
-    this.endpoints.setAttribute('aria-label', '이력 끝점의 모의 시간과 구간 온도차');
-    this.endpoints.innerHTML = `<div data-plot-end="current"><dt></dt><dd></dd></div>
-      <div data-plot-end="saved"><dt></dt><dd></dd></div>`;
+    this.endpoints = panel.querySelector('#temperature-chart-path-values');
     this.endpointRows = Object.fromEntries([...this.endpoints.children].map(row => [row.dataset.plotEnd, row]));
-    canvas.before(metricGroup);
-    canvas.after(this.endpoints);
     this.updateMetricLabels();
   }
   updateMetricLabels() {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createProject, parseProject, serializeProject, normalizeView, normalizePlaybackRate, DEFAULT_VIEW, ProjectError } from '../src/project.js';
+import { createProject, parseProject, serializeProject, normalizeView, normalizePlaybackRate, DEFAULT_VIEW, ProjectError, MAX_PROJECT_BYTES } from '../src/project.js';
 import { DEFAULT_CONFIG, MODEL_VERSION } from '../src/model.js';
 import { createExperiment, ThermalRun, MAX_TIME_S, MAX_EVENTS } from '../src/experiment.js';
 import { COMPONENTS } from '../src/geometry.js';
@@ -100,5 +100,21 @@ test('future versions carry original-protection flags and old products are rejec
 test('one BOM and UTF-8 size limit protect malformed originals without modifying input', () => {
   const project = createProject(), raw = serializeProject(project); assert.deepEqual(parseProject('\ufeff' + raw), project);
   for (const input of ['\ufeff\ufeff' + raw, '{원본\r\n', null, 4]) assert.throws(() => parseProject(input), e => e.code === 'INVALID_JSON');
-  for (const input of [' '.repeat(10 * 1024 * 1024 + 1), '가'.repeat(4 * 1024 * 1024)]) assert.throws(() => parseProject(input), e => e.code === 'PROJECT_TOO_LARGE');
+  for (const input of [' '.repeat(MAX_PROJECT_BYTES + 1), '가'.repeat(Math.ceil(MAX_PROJECT_BYTES / 3))]) assert.throws(() => parseProject(input), e => e.code === 'PROJECT_TOO_LARGE');
+});
+
+test('schema-sized timelines roundtrip and blank padding and escaped punctuation remain valid', () => {
+  const experiment = { ...fixture(), events: Array.from({ length: MAX_EVENTS }, (_, index) =>
+    ({ timeS: index + .12345, powerW: 8, fan: true, fanSpeedPct: 73.456789 })) };
+  const project = createProject({ experiment, comparison: { label: '[{"열"}]', experiment } });
+  const raw = serializeProject(project);
+  assert.equal(project.experiment.events.length, MAX_EVENTS);
+  assert.deepEqual(parseProject(raw + ' '.repeat(MAX_PROJECT_BYTES - Buffer.byteLength(raw))), project);
+});
+
+test('unrecognized project structure is bounded before entering JSON.parse', () => {
+  for (const raw of ['['.repeat(9) + '0' + ']'.repeat(9),
+    '[' + Array.from({ length: 12000 }, () => '0').join(',') + ']']) {
+    assert.throws(() => parseProject(raw), { code: 'PROJECT_TOO_COMPLEX' });
+  }
 });

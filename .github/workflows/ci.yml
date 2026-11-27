@@ -36,12 +36,17 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install locked dependencies and runtimes
         run: |
-          npm ci
+          npm ci --ignore-scripts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node node_modules/electron/install.js
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npx --no-install playwright install chromium
+          node node_modules/playwright/cli.js install chromium
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Audit locked dependencies and verify notices
+        run: |
+          npm audit --audit-level=low
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/verify-notices.mjs
       - name: Verify heat model, timeline, geometry, lessons and project data
         run: npm test
       - name: Build web bundle
@@ -57,13 +62,45 @@ jobs:
         run: npm run test:detail
       - name: Verify source desktop app
         timeout-minutes: 10
-        run: npm run test:desktop
+        run: |
+          node scripts/desktop.mjs prepare-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:desktop
       - name: Package Windows installer
         run: npm run package:desktop
+      - name: Smoke test the production executable
+        timeout-minutes: 3
+        run: |
+          $env:THERMAL_LAB_TEST_BUILD = '1'
+          $env:THERMAL_LAB_DATA_DIR = Join-Path $env:RUNNER_TEMP 'thermal-production-override'
+          $taskLog = Join-Path $env:APPDATA 'Thermal Lab/desktop.log'
+          $taskTitle = [regex]::Match((Get-Content -Raw -LiteralPath 'dist/index.html'), '<title>([^<]+)</title>').Groups[1].Value
+          if (-not $taskTitle) { throw 'Missing production document title' }
+          $taskStart = [Diagnostics.ProcessStartInfo]::new((Resolve-Path 'release/windows/win-unpacked/Thermal Lab.exe').Path)
+          $taskStart.UseShellExecute = $false
+          $task = [Diagnostics.Process]::Start($taskStart)
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(75)
+            do {
+              Start-Sleep -Milliseconds 300
+              $task.Refresh()
+              if ($task.HasExited) { throw "Production executable exited early ($($task.ExitCode))" }
+              $ready = (Test-Path -LiteralPath $taskLog) -and ($task.MainWindowTitle -eq $taskTitle)
+            } until ($ready -or [DateTime]::UtcNow -gt $deadline)
+            if (-not $ready) { throw "Production window did not load. Last title: $($task.MainWindowTitle)" }
+            if (Test-Path -LiteralPath $env:THERMAL_LAB_DATA_DIR) { throw 'Production app accepted the test profile override' }
+            if (-not $task.CloseMainWindow() -or -not $task.WaitForExit(15000) -or $task.ExitCode -ne 0) {
+              throw 'Production executable did not exit cleanly'
+            }
+          } finally {
+            if (-not $task.HasExited) { $task.Kill() }
+          }
+      - name: Package instrumented desktop test executable
+        run: node scripts/desktop.mjs package-test
       - name: Verify independent desktop executable
         timeout-minutes: 10
         run: |
-          $env:THERMAL_DESKTOP_EXE = Join-Path $env:GITHUB_WORKSPACE 'release/windows/win-unpacked/Thermal Lab.exe'
+          $env:THERMAL_DESKTOP_EXE = Join-Path $env:GITHUB_WORKSPACE 'release/windows-test/win-unpacked/Thermal Lab.exe'
           node tests/desktop.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify installer checksum and required documents

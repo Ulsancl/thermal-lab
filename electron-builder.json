@@ -4,6 +4,15 @@
   "copyright": "Thermal Lab",
   "asar": true,
   "publish": null,
+  "electronFuses": {
+    "runAsNode": false,
+    "enableCookieEncryption": true,
+    "enableNodeOptionsEnvironmentVariable": false,
+    "enableNodeCliInspectArguments": false,
+    "enableEmbeddedAsarIntegrityValidation": true,
+    "onlyLoadAppFromAsar": true,
+    "grantFileProtocolExtraPrivileges": false
+  },
   "electronDist": "node_modules/electron/dist",
   "directories": { "output": "release/windows", "buildResources": "desktop/assets" },
   "files": ["desktop/**/*.cjs", "desktop/assets/app.ico", "src/project.js", "src/model.js", "src/experiment.js", "src/geometry.js", "dist/**/*", "package.json"],

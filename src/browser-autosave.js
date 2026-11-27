@@ -91,7 +91,7 @@ export function createBrowserAutosave({ key, storage, locks, expected, baseline,
   return {
     canSave: () => enabled,
     flush,
-    markExported(contents) { exported = contents; },
+    confirmExported(contents) { exported = contents; },
     unsavedDraft,
     hasUnsavedChanges: () => unsavedDraft() !== null,
   };

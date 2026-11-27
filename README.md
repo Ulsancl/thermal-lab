@@ -23,15 +23,15 @@
 Node.js 24 계열에서 다음 명령을 사용합니다.
 
 ```powershell
-npm ci
+npm ci --ignore-scripts
 npm run dev
 ```
 
-`npm test`는 모형·실험 이력·기하·안내·저장·원자적 저장 검사를 실행합니다. `npm run test:browser`는 화면 조작, `npm run test:consumer`는 소비자 관찰, `npm run test:detail`은 상세 열수지와 내부 구조 관찰 검사입니다. `npm run build`로 웹 산출물을 만들고 `npm run desktop`으로 앱을 엽니다. 네이티브 검사는 `node scripts/desktop.mjs prepare-test` 후 `npm run test:desktop`을 사용합니다. 화면을 쓰는 검사는 동시에 실행하지 마세요.
+`npm test`는 모형·실험 이력·기하·안내·저장·원자적 저장 검사를 실행합니다. Chromium 검사 전 `npx --no-install playwright install chromium`과 `npm run build`를 실행합니다. `npm run test:browser`는 화면 조작, `npm run test:consumer`는 소비자 관찰, `npm run test:detail`은 상세 열수지와 내부 구조 관찰 검사입니다. `npm run build`로 웹 산출물을 만들고 `npm run desktop`으로 앱을 엽니다. 네이티브 검사는 `node scripts/desktop.mjs prepare-test` 후 `npm run test:desktop`을 사용합니다. 화면을 쓰는 검사는 동시에 실행하지 마세요.
 
 Windows CI는 잠긴 의존성 설치, 순수 검사, 웹 빌드, 브라우저, 소비자 관찰, 상세 관찰, 소스 네이티브, 패키징, 독립 실행 파일 네이티브 순서로 진행합니다. 설치 파일 해시·고지도 확인하고 실패 화면과 결과를 보관합니다. 자동 릴리스 게시는 하지 않습니다. CI의 가상 환경 결과와 실제 하드웨어 결과는 구분합니다.
 
-`npm run package:desktop`은 Windows x64 설치 파일과 SHA-256 파일을 생성합니다. 설치 앱은 로컬 파일만으로 실행하고 Node.js나 개발 서버가 필요하지 않습니다. 개발 의존성 설치에는 인터넷이 필요할 수 있습니다. 코드 서명과 자동 업데이트는 제공하지 않습니다. 대상은 Windows 11 x64이며 실제 호환성·설치·업데이트 결과는 해당 검증 기록을 따릅니다.
+`npm run package:desktop`은 Windows x64 설치 파일과 SHA-256 파일을 생성합니다. 설치 앱은 로컬 파일만으로 실행하고 Node.js나 개발 서버가 필요하지 않습니다. 개발 의존성 설치에는 인터넷이 필요할 수 있습니다. 정식 Windows 배포에는 승인된 Authenticode 서명으로 `npm run package:release`를 사용합니다. 업데이트는 설치 파일로 직접 진행합니다. 대상은 Windows 11 x64이며 실제 호환성·설치·업데이트 결과는 해당 검증 기록을 따릅니다.
 
 ## 범위와 자료
 

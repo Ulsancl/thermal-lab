@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
+const { windowsWriteProject } = require('./windows-save.cjs');
 
 const WINDOWS_RETRY_DELAYS_MS = Object.freeze([25, 50, 100, 200, 400]);
 const transientCodes = new Set(['EPERM', 'EACCES', 'EBUSY']);
@@ -16,10 +17,11 @@ async function atomicWriteProject(target, contents, {
 } = {}) {
   if (typeof validateTarget !== 'function') throw new TypeError('A target validator is required');
   await validateTarget(target);
+  if (platform === 'win32' && operations === fs) return windowsWriteProject(target, contents);
   const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
   let ownsTemporary = false;
   try {
-    const handle = await operations.open(temporary, 'wx');
+    const handle = await operations.open(temporary, 'wx', 0o600);
     ownsTemporary = true;
     try { await handle.writeFile(contents, 'utf8'); await handle.sync(); }
     finally { await handle.close(); }

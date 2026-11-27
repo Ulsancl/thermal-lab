@@ -3,7 +3,8 @@ import { createExperiment, assertExperiment } from './experiment.js';
 import { DEFAULT_VIEW, COMPONENTS } from './geometry.js';
 export { DEFAULT_VIEW };
 export const projectType = 'thermal-lab-project', projectVersion = 1, projectModelVersion = MODEL_VERSION;
-const MAX_BYTES = 10 * 1024 * 1024, rates = [1, 10, 60];
+export const MAX_PROJECT_BYTES = 1024 * 1024;
+const rates = [1, 10, 60];
 const flags = ['temperature', 'flows', 'exploded', 'labels'];
 const parts = new Set(COMPONENTS.map(part => part.id));
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -86,9 +87,28 @@ export function createProject(input = {}) {
   return { type: projectType, schemaVersion: projectVersion, modelVersion: MODEL_VERSION, experiment, comparison,
     playbackRate: normalizePlaybackRate(value.playbackRate), observation: { view: normalizeView(value.view), camera } };
 }
+function checkJsonStructure(text) {
+  let depth = 0, marks = 0, inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (inString) {
+      if (char === '\\') i++;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === '{' || char === '[') depth++;
+    else if (char === '}' || char === ']') depth--;
+    else if (char !== ',' && char !== ':') continue;
+    // Two 256-event timelines have fewer than 5,300 structural marks.
+    if (depth > 8 || ++marks > 12000) fail('실험 파일 구조가 한도를 초과했습니다.', 'PROJECT_TOO_COMPLEX');
+    if (depth < 0) fail('JSON 실험 파일을 읽을 수 없습니다.', 'INVALID_JSON');
+  }
+}
 export function parseProject(text) {
   if (typeof text !== 'string') fail('실험 파일은 JSON 텍스트여야 합니다.', 'INVALID_JSON');
-  if (text.length > MAX_BYTES || new TextEncoder().encode(text).byteLength > MAX_BYTES) fail('실험 파일은 10 MiB 이하여야 합니다.', 'PROJECT_TOO_LARGE');
+  if (text.length > MAX_PROJECT_BYTES || new TextEncoder().encode(text).byteLength > MAX_PROJECT_BYTES) fail('실험 파일은 1 MiB 이하여야 합니다.', 'PROJECT_TOO_LARGE');
+  checkJsonStructure(text);
   let value; try { value = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text); } catch { fail('JSON 실험 파일을 읽을 수 없습니다.', 'INVALID_JSON'); }
   return validateProject(value);
 }
