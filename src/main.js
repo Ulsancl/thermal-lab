@@ -2,7 +2,7 @@ import './style.css';
 import './conditions.css';
 import { AMBIENT_C, DEFAULT_CONFIG, FAN_SPEED_PCT, fanSpeedPercent, normalizeConfig } from './model.js';
 import { ThermalRun, createExperiment } from './experiment.js';
-import { createProject, parseProject, serializeProject, normalizeView, DEFAULT_VIEW } from './project.js';
+import { createProject, parseProject, serializeProject, normalizeView, DEFAULT_VIEW, MAX_PROJECT_BYTES } from './project.js';
 import { createBrowserAutosave, supportsAutosaveLock, withAutosaveLock, writeIfUnchanged, readTabDraft, writeTabDraft, clearTabDraft } from './browser-autosave.js';
 import { COMPONENTS, temperatureColor } from './geometry.js';
 import { ThermalScene } from './scene.js';
@@ -11,6 +11,7 @@ import { TemperatureChart } from './chart.js';
 import { thermalDetail } from './detail-model.js';
 import { ThermalDetailPanel } from './detail-panel.js';
 import './detail-panel.css';
+import { version } from '../package.json';
 
 const $ = selector => document.querySelector(selector), $$ = selector => [...document.querySelectorAll(selector)];
 const text = (selector, value) => { $(selector).textContent = value; };
@@ -53,6 +54,7 @@ function endInspection() { scene?.endInspection?.(); refresh(); scheduleSave(); 
 function capture() { return createProject({ experiment: run.exportExperiment(), comparison, playbackRate, view, camera: scene?.getProjectCameraState?.() ?? scene?.getCameraState() ?? initialCamera }); }
 let lastStoredRaw = null, browserAutosave = null, guardArmed = false;
 let resumedTabDraft = false, interruptedTabDraft = null, tabDraftProtected = false;
+let offeredProject = null;
 const draftStorage = () => sessionStorage;
 const getBrowserLocks = () => { try { return navigator.locks; } catch { return undefined; } };
 const currentProjectText = () => serializeProject(capture());
@@ -72,7 +74,7 @@ function rememberBrowserDraft() {
 }
 function warnOnUnsavedExit(event) {
   const dirty = rememberBrowserDraft();
-  if (!running && !dirty) return;
+  if (!running && !dirty && !tabDraftProtected) return;
   event.preventDefault();
   event.returnValue = true;
 }
@@ -88,7 +90,9 @@ function disarmUnloadGuard() {
 function reportAutosave(status, contents) {
   if (status === 'saved' || status === 'unchanged') {
     if (!desktop && !tabDraftProtected) clearTabDraft(draftStorage, STORAGE_KEY, contents);
-    if (!running) disarmUnloadGuard();
+    if (!running && !tabDraftProtected) disarmUnloadGuard();
+    offeredProject = null;
+    $('#confirm-project-download').hidden = true;
     $('#autosave-recovery').hidden = true;
     text('#save-status', status === 'saved' ? '이 기기에 자동 저장됨' : '자동 저장할 변경 없음');
     return;
@@ -229,11 +233,11 @@ function setBusy(value) {
 }
 function remember() { syncTime(); previous = { project: capture(), guide: copy(guide) }; $('#undo-new').hidden = false; }
 function readProject(project, restoredGuide = null) {
-  const saved = parseProject(serializeProject(project)), nextRun = new ThermalRun(saved.experiment);
+  const nextRun = new ThermalRun(project.experiment);
   pause(); scene?.endInspection?.(); restoring = true;
   try {
-    run = nextRun; snapshot = run.getSnapshot(); ({ comparison, playbackRate } = saved);
-    ({ view, camera: initialCamera } = saved.observation); guide = restoredGuide; animationTimeS = 0; chartDisplay = 'both';
+    run = nextRun; snapshot = run.getSnapshot(); ({ comparison, playbackRate } = project);
+    ({ view, camera: initialCamera } = project.observation); guide = restoredGuide; animationTimeS = 0; chartDisplay = 'both';
     syncControls({ resetAmbient: true }); refresh(); if (initialCamera) scene?.setCameraState(initialCamera); else scene?.resetCamera();
   } finally { restoring = false; }
   saveLocal();
@@ -368,20 +372,34 @@ function projectFilename(suffix = '') {
 }
 function downloadBrowserProject(contents, filename) {
   browserDownload(contents, filename);
-  // The browser owns the download prompt; this records the snapshot offered
-  // to it, not a guarantee that the user kept the file.
-  browserAutosave.markExported(contents);
-  if (!tabDraftProtected) clearTabDraft(draftStorage, STORAGE_KEY);
-  if (!running) disarmUnloadGuard();
+  offeredProject = contents;
+  armUnloadGuard();
+  rememberBrowserDraft();
+  if (storageBlocked) reportAutosave('unavailable');
+  $('#confirm-project-download').hidden = false;
+}
+function confirmProjectDownload() {
+  if (offeredProject === null) return;
+  browserAutosave.confirmExported(offeredProject);
+  if (!tabDraftProtected) clearTabDraft(draftStorage, STORAGE_KEY, offeredProject);
+  offeredProject = null;
+  $('#confirm-project-download').hidden = true;
+  if (!rememberBrowserDraft() && !running && !tabDraftProtected) disarmUnloadGuard();
 }
 function exportInterruptedTabDraft() {
   if (busy || interruptedTabDraft === null) return;
   try {
     browserDownload(interruptedTabDraft, projectFilename('-interrupted'));
-    if (tabDraftProtected) clearTabDraft(draftStorage, STORAGE_KEY, interruptedTabDraft);
-    tabDraftProtected = false;
+    $('#confirm-interrupted-download').hidden = false;
     toast('내려받은 복구 사본을 확인하세요.');
   } catch (error) { toast(`내려받지 못했습니다. ${error.message}`); }
+}
+function confirmInterruptedDownload() {
+  clearTabDraft(draftStorage, STORAGE_KEY, interruptedTabDraft);
+  interruptedTabDraft = null;
+  tabDraftProtected = false;
+  $('#tab-draft-recovery').hidden = true;
+  if (!rememberBrowserDraft() && !running) disarmUnloadGuard();
 }
 function exportUnsavedProject() {
   if (busy) return;
@@ -397,7 +415,12 @@ async function saveFile() {
   try {
     const contents = currentProjectText(), name = projectFilename();
     if (desktop) { const result = await desktop.saveProject({ contents, name }); if (result.canceled) { toast('저장을 취소했습니다. 현재 실험은 유지합니다.'); return; } }
-    else downloadBrowserProject(contents, name);
+    else {
+      downloadBrowserProject(contents, name);
+      saveLocal();
+      toast('내려받은 실험 파일을 확인하세요.');
+      return;
+    }
     saveLocal(); toast('실험 이력·비교 기준·관찰 시점을 저장했습니다.');
   } catch (error) { toast(`저장하지 못했습니다. ${error.message}`); } finally { setBusy(false); }
 }
@@ -405,7 +428,7 @@ async function openFile() {
   if (busy) return; pause();
   if (!desktop) { $('#project-file').click(); return; }
   setBusy(true);
-  try { const result = await desktop.openProject(); if (result.canceled) { toast('열기를 취소했습니다. 현재 실험은 유지합니다.'); return; } const saved = parseProject(result.content); remember(); readProject(saved); toast('저장한 열 실험을 복원했습니다.'); }
+  try { const result = await desktop.openProject(); if (result.canceled) { toast('열기를 취소했습니다. 현재 실험은 유지합니다.'); return; } remember(); readProject(result.project); toast('저장한 열 실험을 복원했습니다.'); }
   catch (error) { toast(`열지 못했습니다. ${error.message}`); } finally { setBusy(false); }
 }
 function toggleFocus() { focused = !focused; document.body.classList.toggle('focus-mode', focused); text('#focus', focused ? '실험 화면으로' : '3D 크게 보기'); returnToScene(); }
@@ -413,6 +436,7 @@ function toggleFocus() { focused = !focused; document.body.classList.toggle('foc
 $('#part-select').replaceChildren(...COMPONENTS.map(part => Object.assign(document.createElement('option'), { value: part.id, textContent: part.name })));
 Object.assign($('#ambient-c'), { min: AMBIENT_C.min, max: AMBIENT_C.max });
 Object.assign($('#fan-speed'), { min: FAN_SPEED_PCT.min, max: FAN_SPEED_PCT.max });
+text('#app-version', version);
 text('#ambient-hint', `${AMBIENT_C.min}–${AMBIENT_C.max} °C · 적용하면 이 온도에서 새 실험을 시작합니다.`);
 $('#temperature-gradient').style.background = `linear-gradient(90deg,${temperatureColor(25)},${temperatureColor(65)} 47%,${temperatureColor(110)})`;
 try {
@@ -425,6 +449,7 @@ if (!desktop) {
     key: STORAGE_KEY, storage: () => localStorage, locks: getBrowserLocks(), expected: lastStoredRaw,
     baseline: resumedTabDraft ? null : currentProjectText(), capture: currentProjectText, onStatus: reportAutosave,
   });
+  if (tabDraftProtected) armUnloadGuard();
   if (!storageBlocked && !browserAutosave.canSave()) reportAutosave('unavailable');
   else if (resumedTabDraft) saveLocal();
 }
@@ -455,10 +480,12 @@ $('#new-project').addEventListener('click', newExperiment);
 $('#undo-new').addEventListener('click', () => { if (!previous || busy) return; const saved = previous; previous = null; readProject(saved.project, saved.guide); $('#undo-new').hidden = true; toast('직전 실험과 안내를 복원했습니다.'); });
 $('#export-unsaved-project').addEventListener('click', exportUnsavedProject);
 $('#export-interrupted-draft').addEventListener('click', exportInterruptedTabDraft);
+$('#confirm-project-download').addEventListener('click', confirmProjectDownload);
+$('#confirm-interrupted-download').addEventListener('click', confirmInterruptedDownload);
 $('#save-project').addEventListener('click', saveFile); $('#open-project').addEventListener('click', openFile);
 $('#project-file').addEventListener('change', async event => {
   const file = event.target.files?.[0]; if (!file || busy) return; setBusy(true);
-  try { if (file.size > 10 * 1024 * 1024) throw new Error('실험 파일은 10 MiB 이하여야 합니다.'); const saved = parseProject(await file.text()); remember(); readProject(saved); toast('저장한 열 실험을 복원했습니다.'); }
+  try { if (file.size > MAX_PROJECT_BYTES) throw new Error('실험 파일은 1 MiB 이하여야 합니다.'); const saved = parseProject(await file.text()); remember(); readProject(saved); toast('저장한 열 실험을 복원했습니다.'); }
   catch (error) { toast(`열지 못했습니다. ${error.message}`); } finally { event.target.value = ''; setBusy(false); }
 });
 $('#recover-original').addEventListener('click', () => { if (recoveredRaw !== null) browserDownload(recoveredRaw, 'thermal-lab-original.txt', 'text/plain;charset=utf-8'); });
@@ -478,12 +505,14 @@ document.addEventListener('visibilitychange', () => {
 });
 $('#sample-details').addEventListener('toggle', renderSamples);
 new ResizeObserver(drawChart).observe($('#temperature-chart'));
-window.thermalLab = {
-  getState: () => copy({ experiment: run.exportExperiment(), snapshot, view, comparison, playbackRate, running }),
-  project: () => { syncTime(); return copy(capture()); },
-  loadProject: raw => { const saved = parseProject(raw); remember(); readProject(saved); return copy(capture()); },
-  step, sceneDebug: () => scene?.getDebug() ?? null, guide: () => copy(guide), chartDebug: () => copy(chart.debug),
-  getDetail: () => thermalDetail(snapshot), getInspection: () => scene?.getInspection?.() ?? null, beginInspection, endInspection,
-};
-window.render_game_to_text = () => JSON.stringify({ mode: running ? 'running' : 'paused', coordinateSystem: 'SI; x right, y up, z toward front. Temperatures are two lumped mean values.', snapshot, selectedPart: view.selectedPart, inspection: scene?.getInspection?.() ?? null, playbackRate, comparison: Boolean(comparison) });
-window.advanceTime = milliseconds => step(milliseconds / 1000);
+if (__THERMAL_TEST_BUILD__) {
+  window.thermalLab = {
+    getState: () => copy({ experiment: run.exportExperiment(), snapshot, view, comparison, playbackRate, running }),
+    project: () => { syncTime(); return copy(capture()); },
+    loadProject: raw => { const saved = parseProject(raw); remember(); readProject(saved); return copy(capture()); },
+    step, sceneDebug: () => scene?.getDebug() ?? null, guide: () => copy(guide), chartDebug: () => copy(chart.debug),
+    getDetail: () => thermalDetail(snapshot), getInspection: () => scene?.getInspection?.() ?? null, beginInspection, endInspection,
+  };
+  window.render_game_to_text = () => JSON.stringify({ mode: running ? 'running' : 'paused', coordinateSystem: 'SI; x right, y up, z toward front. Temperatures are two lumped mean values.', snapshot, selectedPart: view.selectedPart, inspection: scene?.getInspection?.() ?? null, playbackRate, comparison: Boolean(comparison) });
+  window.advanceTime = milliseconds => step(milliseconds / 1000);
+}

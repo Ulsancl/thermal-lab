@@ -103,7 +103,7 @@ test('on conflict the unsaved snapshot remains exportable and later changes do n
   assert.deepEqual(states, ['conflict']);
   assert.equal(autosave.canSave(), false);
   assert.equal(autosave.hasUnsavedChanges(), true);
-  autosave.markExported(current);
+  autosave.confirmExported(current);
   assert.equal(autosave.hasUnsavedChanges(), false);
   current = 'edit after export';
   assert.equal(autosave.hasUnsavedChanges(), true);

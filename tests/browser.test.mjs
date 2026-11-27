@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright';
-import { createServer } from 'vite';
+import { createServer, preview } from 'vite';
 import { autosaveLockName } from '../src/browser-autosave.js';
 import { ThermalRun } from '../src/experiment.js';
 import { DEFAULT_CONFIG } from '../src/model.js';
@@ -12,6 +12,7 @@ import { createProject, serializeProject } from '../src/project.js';
 import { temperatureColor } from '../src/geometry.js';
 
 const root = path.resolve(import.meta.dirname, '..');
+const { version } = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
 const output = artifactDirectory(root, path.join(root, 'output/browser-integration'));
 const baseURL = 'http://127.0.0.1:5231/', storageKey = 'thermal-lab-project-v1';
 await fs.mkdir(output, { recursive: true });
@@ -56,6 +57,14 @@ async function parity() {
 }
 try {
   await page.goto('http://127.0.0.1:5231/'); await page.waitForFunction(() => window.thermalLab?.sceneDebug()?.ready);
+  await check('development server denies generated diagnostics while serving application inputs', async () => {
+    await fs.writeFile(path.join(output, 'local-fixture.json'), '{"kind":"synthetic diagnostic"}');
+    const requestPath = path.relative(root, path.join(output, 'local-fixture.json')).replaceAll(path.sep, '/');
+    const denied = await page.request.get(new URL(requestPath, baseURL).href);
+    assert.equal(denied.status(), 403);
+    assert.doesNotMatch(await denied.text(), /synthetic diagnostic/);
+    assert.equal((await page.request.get(new URL('src/project.js', baseURL).href)).status(), 200);
+  });
   await check('two real browser tabs queue concurrently and cannot overwrite each other', async () => {
     const tabs = await browser.newContext({ viewport: { width: 1200, height: 900 }, acceptDownloads: true });
     const open = async () => {
@@ -113,6 +122,11 @@ try {
       assert.equal(await exitsWithWarning(second), true, 'a conflicted edit remains unsaved');
       await stepTab(second); // The recovery button must capture latest, not first-conflicted, edits.
       const expectedFile = await second.evaluate(() => window.thermalLab.project());
+      const cancelled = second.waitForEvent('download');
+      await second.locator('#export-unsaved-project').click();
+      await (await cancelled).cancel();
+      assert.equal(await exitsWithWarning(second), true, 'offering a download leaves the recovery guard armed');
+      assert.deepEqual(await second.evaluate(key => JSON.parse(JSON.parse(sessionStorage.getItem(key + ':tab-draft')).contents), storageKey), expectedFile);
       const pending = second.waitForEvent('download');
       await second.locator('#export-unsaved-project').click();
       const savedFile = await pending;
@@ -122,7 +136,9 @@ try {
       assert.deepEqual(JSON.parse(await fs.readFile(target, 'utf8')), expectedFile);
       assert.equal(expectedFile.experiment.elapsedS, 420);
       assert.equal(await stored(second), winner);
-      assert.equal(await exitsWithWarning(second), false, 'the exact current snapshot has been offered for download');
+      assert.equal(await exitsWithWarning(second), true, 'only explicit confirmation clears the guard');
+      await second.locator('#confirm-project-download').click();
+      assert.equal(await exitsWithWarning(second), false);
       await second.reload();
       await second.waitForFunction(() => window.thermalLab?.getState().experiment.elapsedS === 180);
       assert.equal(await second.locator('#autosave-recovery').isHidden(), true);
@@ -158,6 +174,16 @@ try {
       await recovered.saveAs(recoveryPath);
       assert.deepEqual(JSON.parse(await fs.readFile(recoveryPath, 'utf8')), expectedFile);
       assert.equal(await stored(second), latest);
+      assert.equal(await exitsWithWarning(second), true);
+      await second.reload();
+      await second.waitForFunction(() => window.thermalLab && !document.querySelector('#tab-draft-recovery').hidden);
+      assert.deepEqual(await second.evaluate(() => window.thermalLab.project()), journalProject);
+      const retry = second.waitForEvent('download');
+      await second.locator('#export-interrupted-draft').click();
+      await (await retry).saveAs(recoveryPath);
+      await second.locator('#confirm-interrupted-download').click();
+      assert.equal(await second.locator('#tab-draft-recovery').isHidden(), true);
+      assert.equal(await second.evaluate(key => sessionStorage.getItem(key + ':tab-draft'), storageKey), null);
       // Continuous model time is dirty even between the periodic save ticks.
       await second.locator('#play').click();
       assert.equal(await exitsWithWarning(second), true);
@@ -341,6 +367,26 @@ try {
     assert.equal(await heater.evaluate(element => document.activeElement === element), true);
     await page.keyboard.press('Enter');
     assert.equal((await state()).view.selectedPart, 'heater-block');
+  });
+  await check('built web bundle starts with CSP, current version and no test controls', async () => {
+    const server = await preview({ root, preview: { host: '127.0.0.1', port: 5237, strictPort: true } });
+    const tab = await context.newPage();
+    try {
+      watch(tab);
+      await tab.goto('http://127.0.0.1:5237/');
+      await tab.waitForFunction(expected => document.querySelector('#app-version').textContent === expected
+        && document.querySelector('#scene canvas'), version);
+      const policy = await tab.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content');
+      assert.match(policy, /script-src 'self'/);
+      assert.match(policy, /form-action 'none'/);
+      assert.deepEqual(await tab.evaluate(() => [typeof window.thermalLab, typeof window.render_game_to_text,
+        typeof window.advanceTime]), ['undefined', 'undefined', 'undefined']);
+      await tab.locator('#step').click();
+      await tab.waitForFunction(() => document.querySelector('#time').textContent.startsWith('01:00'));
+    } finally {
+      await tab.close();
+      await new Promise((resolve, reject) => server.httpServer.close(error => error ? reject(error) : resolve()));
+    }
   });
   assert.deepEqual(errors, []); assert.deepEqual(externalRequests, []);
 } catch (error) { failure = error; console.error(error.stack); await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {}); }

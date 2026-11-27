@@ -6,13 +6,6 @@ const format = (value, digits = 2) => typeof value === 'number'
   : String(value);
 const conditionNumber = value => value > 0 && value < .01 ? value.toExponential(1) : value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
 
-const flowRows = [
-  ['전원 → 발열체', 'inputW', 'input'],
-  ['발열체 → 방열판', 'contactW', 'contact'],
-  ['방열판 → 공기', 'airW', 'air'],
-  ['발열체 저장 변화', 'heaterStorageW', 'contact'],
-  ['방열판 저장 변화', 'sinkStorageW', 'sink'],
-];
 const flowScaleW = 24;
 
 function thermalPhase({ totalStorageW, inputW }) {
@@ -24,23 +17,6 @@ function thermalPhase({ totalStorageW, inputW }) {
 export class ThermalDetailPanel {
   constructor(root, facts, note, onSelect) {
     this.root = root; this.facts = facts; this.note = note;
-    root.innerHTML = `<div class="section-heading"><div><span class="eyebrow">HEAT BALANCE / 열의 흐름</span><h2 id="thermal-detail-title">들어온 열은 어디에 남을까요?</h2></div><span class="thermal-phase" role="status" aria-atomic="true"></span></div>
-      <p class="detail-explainer thermal-context"></p>
-      <div class="heat-rates" role="group" aria-label="입력·전달 열률과 저장 변화율">
-        <div class="heat-rate-axis" aria-hidden="true"><span>열률 [W]</span><div class="heat-rate-ticks"><span class="heat-rate-min"></span><span>0</span><span class="heat-rate-max"></span></div></div>
-        ${flowRows.map(([label, key, color]) => `<div class="heat-rate-row">
-          <span>${label}</span><div class="heat-rate-track" aria-hidden="true"><i data-flow-rate="${key}" class="heat-rate-${color}"></i></div><b data-value="power.${key}"></b>
-        </div>`).join('')}
-      </div>
-      <p class="detail-explainer heat-rate-caption">같은 W 축에서 저장 변화가 음수이면 해당 부품의 저장열이 줄어듭니다.</p>
-      <p class="detail-balance" id="thermal-balance"></p><p class="detail-explainer" id="thermal-rate-note"></p>
-      <div class="thermal-circuit" role="group" aria-label="저장열과 누적 전달열">
-        <button type="button" class="circuit-node heater-node" data-part="heater-block"><span>발열체 저장열</span><strong data-value="energy.heaterJ"></strong></button>
-        <button type="button" class="circuit-node sink-node" data-part="heat-sink"><span>방열판 저장열</span><strong data-value="energy.sinkJ"></strong></button>
-        <button type="button" class="circuit-node air-node" data-part="fan-frame"><span>누적 공기 전달열</span><strong data-value="energy.releasedJ"></strong></button>
-      </div>
-      <details class="thermal-resistance"><summary>접촉면과 공기의 열저항 비교</summary><div class="resistance-labels"><button type="button" data-part="contact-pad">접촉 <b data-value="path.contactResistanceKPerW"></b></button><button type="button" data-part="fan-frame">공기 <b data-value="path.airResistanceKPerW"></b></button></div><div class="resistance-bar" aria-hidden="true"><i id="contact-resistance-share"></i></div><p id="resistance-explanation"></p></details>
-      <details class="thermal-modes"><summary>서로 다른 두 응답 시간</summary><p>같은 전력·팬 조건을 유지하면 현재 온도와 정상온도의 차이는 각각 감쇠하는 빠른 성분과 느린 성분의 합으로 표현됩니다.</p><div class="mode-pair"><div><span>빠른 성분의 시간상수</span><strong data-value="modes.fastTauS"></strong><small>발열체 <b data-value="modes.heaterFastK"></b> · 방열판 <b data-value="modes.sinkFastK"></b></small></div><div><span>느린 성분의 시간상수</span><strong data-value="modes.slowTauS"></strong><small>발열체 <b data-value="modes.heaterSlowK"></b> · 방열판 <b data-value="modes.sinkSlowK"></b></small></div></div><p>각 시간상수 뒤에는 해당 성분이 약 36.8% 남습니다. 표시된 K는 현재 성분의 크기이며, 시간상수는 정상온도에 도달하는 시각이 아닙니다.</p></details>`;
     root.querySelectorAll('[data-part]').forEach(button => button.addEventListener('click', () => onSelect(button.dataset.part)));
     this.phase = root.querySelector('.thermal-phase');
     this.context = root.querySelector('.thermal-context');

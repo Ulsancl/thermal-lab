@@ -4,25 +4,28 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { atomicWriteProject } = require('./atomic-save.cjs');
+const { readProjectBytes } = require('./read-project.cjs');
+const { configureProfile } = require('./profile.cjs');
 
 const APP_URL = 'app://thermal/';
 const APP_NAME = 'Thermal Lab';
 const APP_ID = 'com.thermallab.app';
-const MAX_PROJECT_BYTES = 10 * 1024 * 1024;
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.txt': 'text/plain; charset=utf-8' };
 let mainWindow, calculationBusy = false, nativeBusy = 0, closePrompt = false;
 const downloads = new Set();
 let codec;
+const loadCodec = () => codec ??= import(pathToFileURL(path.join(__dirname, '..', 'src', 'project.js')).href);
+const testBuild = app.isPackaged
+  ? require('../package.json').thermalTestBuild === true
+  : process.env.THERMAL_LAB_TEST_BUILD === '1';
 
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_ID);
 // Stable profile and origin preserve user data across ordinary app updates.
-const profileOverride = process.env.THERMAL_LAB_DATA_DIR;
-if (profileOverride && !path.isAbsolute(profileOverride)) throw new Error('THERMAL_LAB_DATA_DIR must be absolute');
-app.setPath('userData', profileOverride || path.join(app.getPath('appData'), APP_NAME));
-fs.mkdirSync(app.getPath('userData'), { recursive: true });
+app.setPath('userData', configureProfile(path.join(app.getPath('appData'), APP_NAME),
+  !app.isPackaged || testBuild ? process.env.THERMAL_LAB_DATA_DIR : undefined));
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: {
   standard: true, secure: true, supportFetchAPI: true, corsEnabled: true,
 } }]);
@@ -46,24 +49,6 @@ function safeFileName(value) {
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) name = `thermal-${name}`;
   return name || '열 실험.thermal.json';
 }
-function jsonText(contents) {
-  if (typeof contents !== 'string' || Buffer.byteLength(contents, 'utf8') > MAX_PROJECT_BYTES) {
-    throw new Error('실험 파일은 10 MiB 이하인 JSON 텍스트여야 합니다.');
-  }
-  try {
-    const parsed = JSON.parse(contents.charCodeAt(0) === 0xfeff ? contents.slice(1) : contents);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
-  } catch { throw new Error('JSON 실험 파일을 읽을 수 없습니다. 원본 파일은 변경하지 않습니다.'); }
-  return contents;
-}
-
-async function validatedText(contents) {
-  jsonText(contents);
-  codec ??= import(pathToFileURL(path.join(__dirname, '..', 'src', 'project.js')).href);
-  const { parseProject } = await codec;
-  parseProject(contents);
-  return contents;
-}
 async function projectTarget(target, allowMissing = false) {
   if (typeof target !== 'string' || !path.isAbsolute(target)) throw new Error('실험 파일의 절대 경로를 확인해 주세요.');
   const parent = path.dirname(target), realParent = await fsp.realpath(parent);
@@ -80,7 +65,7 @@ async function serveBundle(request) {
   if (!trustedURL(request.url)) return new Response('Not found', { status: 404 });
   if (!['GET', 'HEAD'].includes(request.method)) return new Response('Method not allowed', { status: 405 });
   try {
-    const root = path.join(app.getAppPath(), 'dist');
+    const root = path.join(app.getAppPath(), !app.isPackaged && testBuild ? 'dist-desktop-test' : 'dist');
     const pathname = decodeURIComponent(new URL(request.url).pathname);
     const target = path.resolve(root, '.' + (pathname === '/' ? '/index.html' : pathname));
     const relative = path.relative(root, target);
@@ -95,7 +80,7 @@ async function serveBundle(request) {
     return new Response(request.method === 'HEAD' ? null : data, { headers: {
       'Content-Type': mime[path.extname(actual)] || 'application/octet-stream',
       'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+      'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; worker-src 'none'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'",
     } });
   } catch { return new Response('Not found', { status: 404 }); }
 }
@@ -112,17 +97,18 @@ function registerFileActions() {
       const result = await dialog.showOpenDialog(mainWindow, { title: '열 실험 열기',
         properties: ['openFile'], filters: [{ name: '열 실험 JSON', extensions: ['json'] }] });
       if (result.canceled || !result.filePaths[0]) return { canceled: true };
+      const { MAX_PROJECT_BYTES, parseProject } = await loadCodec();
       const target = result.filePaths[0], stat = await projectTarget(target);
-      if (!stat.isFile() || stat.size > MAX_PROJECT_BYTES) throw new Error('실험 파일은 10 MiB 이하인 JSON 파일이어야 합니다.');
-      const handle = await fsp.open(target, 'r');
+      if (stat.size > MAX_PROJECT_BYTES) throw new Error('실험 파일은 1 MiB 이하여야 합니다.');
+      const handle = await fsp.open(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
       let bytes;
       try {
         const opened = await handle.stat();
-        if (!opened.isFile() || opened.size > MAX_PROJECT_BYTES || opened.dev !== stat.dev || opened.ino !== stat.ino) throw new Error('실험 파일이 변경되었습니다. 다시 선택해 주세요.');
-        bytes = await handle.readFile();
+        if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) throw new Error('실험 파일이 변경되었습니다. 다시 선택해 주세요.');
+        if (opened.size > MAX_PROJECT_BYTES) throw new Error('실험 파일은 1 MiB 이하여야 합니다.');
+        bytes = await readProjectBytes(handle, MAX_PROJECT_BYTES);
       } finally { await handle.close(); }
-      if (bytes.byteLength > MAX_PROJECT_BYTES) throw new Error('실험 파일은 10 MiB 이하여야 합니다.');
-      return { canceled: false, content: await validatedText(bytes.toString('utf8')), path: target };
+      return { canceled: false, project: parseProject(bytes.toString('utf8')), path: target };
     } finally { nativeBusy--; }
   });
   ipcMain.handle('thermal:save-project', async (event, payload) => {
@@ -131,7 +117,8 @@ function registerFileActions() {
     if (!payload || typeof payload !== 'object') throw new Error('실험 파일 내용을 확인해 주세요.');
     nativeBusy++;
     try {
-      const contents = await validatedText(payload.contents);
+      const { parseProject, serializeProject } = await loadCodec();
+      const contents = serializeProject(parseProject(payload.contents));
       const result = await dialog.showSaveDialog(mainWindow, { title: '열 실험 저장',
         defaultPath: path.join(app.getPath('documents'), safeFileName(payload.name)),
         filters: [{ name: '열 실험 JSON', extensions: ['json'] }] });
@@ -214,10 +201,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({ ...preferredBounds, title: APP_NAME, show: false,
     backgroundColor: '#101820', icon: path.join(__dirname, 'assets', 'app.ico'),
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true,
-      sandbox: true, nodeIntegration: false, webSecurity: true },
+      sandbox: true, nodeIntegration: false, webSecurity: true, webviewTag: false },
   });
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  mainWindow.webContents.on('will-navigate', (event, url) => { if (!trustedURL(url)) event.preventDefault(); });
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     calculationBusy = false; log(`Renderer ended: ${details.reason}`);
     dialog.showMessageBox(mainWindow, { type: 'error', title: APP_NAME, message: '화면을 계속 표시하지 못했습니다.',
@@ -252,6 +237,15 @@ function createWindow() {
   createMenu(); mainWindow.loadURL(APP_URL);
 }
 
+app.on('web-contents-created', (_event, contents) => {
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const deny = event => event.preventDefault();
+  contents.on('will-attach-webview', deny);
+  contents.on('will-navigate', deny);
+  contents.on('will-frame-navigate', deny);
+  contents.on('will-redirect', deny);
+});
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (mainWindow) {
@@ -259,8 +253,10 @@ else {
   } });
   app.whenReady().then(async () => {
     protocol.handle('app', serveBundle);
-    session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] },
-      (_details, callback) => callback({ cancel: true }));
+    session.defaultSession.webRequest.onBeforeRequest(({ url }, callback) => {
+      // The renderer makes Blob downloads for local recovery and has no external resources.
+      callback({ cancel: !trustedURL(url) && !(url.startsWith('blob:') && trustedURL(url.slice(5))) && !url.startsWith('data:') });
+    });
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
     session.defaultSession.on('will-download', (_event, item, contents) => {

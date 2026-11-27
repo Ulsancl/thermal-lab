@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { _electron as electron } from 'playwright';
 import { ThermalRun } from '../src/experiment.js';
-import { createProject } from '../src/project.js';
+import { createProject, MAX_PROJECT_BYTES, serializeProject } from '../src/project.js';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -20,7 +20,7 @@ await fs.mkdir(output, { recursive: true });
 const profile = await fs.mkdtemp(path.join(output, 'profile-'));
 const evidence = path.join(profile, 'test-artifacts');
 await fs.mkdir(evidence);
-const env = { ...process.env, THERMAL_LAB_DATA_DIR: profile };
+const env = { ...process.env, THERMAL_LAB_DATA_DIR: profile, THERMAL_LAB_TEST_BUILD: '1' };
 delete env.ELECTRON_RUN_AS_NODE;
 const projectPath = path.join(evidence, '열 관찰.thermal.json');
 const checks = [], errors = [], remoteRequests = [], processes = [];
@@ -265,6 +265,14 @@ try {
     assert.equal((await state()).running, false);
     sameProject(await project(), saved); assert.equal(await fs.readFile(bomPath, 'utf8'), bomRaw);
   });
+  await check('native save validates and normalizes accepted project text', async () => {
+    const snapshot = await project(), target = path.join(evidence, 'canonical.thermal.json');
+    await saveDialog(target);
+    const result = await page.evaluate(contents => window.thermalDesktop.saveProject({ contents, name: 'canonical.json' }),
+      '\ufeff \r\n' + JSON.stringify(snapshot) + '   ');
+    assert.equal(result.canceled, false);
+    assert.equal(await fs.readFile(target, 'utf8'), serializeProject(snapshot));
+  });
   await check('cancel, malformed/future/oversized files and directory/link targets preserve current and original records', async () => {
     const before = await project(), original = await fs.readFile(projectPath, 'utf8');
     await saveDialog(projectPath, true); await page.locator('#save-project').click();
@@ -276,7 +284,7 @@ try {
       ['broken.json', '{synthetic invalid JSON\r\n원문'],
       ['future.json', JSON.stringify({ ...saved, schemaVersion: 2 })],
       ['future-model.json', JSON.stringify({ ...saved, modelVersion: 'thermal-two-node-2' })],
-      ['too-large.json', ' '.repeat(10 * 1024 * 1024 + 1)],
+      ['too-large.json', ' '.repeat(MAX_PROJECT_BYTES + 1)],
     ]) {
       const file = path.join(evidence, name); await fs.writeFile(file, raw);
       await openDialog(file); await freshToast(() => page.locator('#open-project').click(), '못|실패|지원|파일');
