@@ -40,15 +40,14 @@
 
 .thermal-part-label {
   position: absolute;
-  height: 30px;
-  min-height: 30px;
+  min-height: 28px;
   border: 1px solid #7c9da17d;
   border-radius: 5px;
   padding: 5px 8px 5px 12px;
   background: #172833f2;
   color: #edf2f3;
   text-align: left;
-  font: 550 11px/1.35 "Segoe UI", "Malgun Gothic", sans-serif;
+  font: 550 11px/1.35 var(--app-font);
   font-variant-numeric: tabular-nums;
   pointer-events: auto;
   box-shadow: inset 3px 0 var(--node-temperature, transparent), 0 2px 8px #0004;
@@ -79,7 +78,7 @@
   background: #192d39f0;
   color: #d4e4ea;
   padding: 5px 8px;
-  font: 500 10px/1.5 "Segoe UI", "Malgun Gothic", sans-serif;
+  font: 500 10px/1.5 var(--app-font);
 }
 
 .thermal-scene-note { left: 10px; max-width: 49%; }
@@ -104,8 +103,16 @@
 .workbench:has(.thermal-scene):has(#temperature:not(:checked)) .temperature-legend { display: none; }
 
 @container (max-width: 530px) {
-  .thermal-part-label { font-size: 10px; padding-left: 9px; }
+  .thermal-part-label { font-size: 10px; padding: 4px 6px 4px 9px; }
   .thermal-scene-note,
-  .thermal-flow-readout { left: 9px; right: 9px; max-width: none; text-align: center; }
-  .thermal-scene-note:has(+ .thermal-flow-readout:not([hidden])) { bottom: 38px; }
+  .thermal-flow-readout {
+    left: 50%;
+    right: auto;
+    width: max-content;
+    max-width: calc(100% - 18px);
+    padding: 4px 7px;
+    transform: translateX(-50%);
+    text-align: center;
+  }
+  .thermal-scene-note:has(+ .thermal-flow-readout:not([hidden])) { bottom: 37px; }
 }
